@@ -132,6 +132,12 @@
     <ClInclude Include="FancyZonesData\LayoutDefaults.h">
       <Filter>Header Files\FancyZonesData</Filter>
     </ClInclude>
+    <ClInclude Include="DockTree.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FancyZonesData\DockLayouts.h">
+      <Filter>Header Files\FancyZonesData</Filter>
+    </ClInclude>
     <ClInclude Include="FancyZonesData\LayoutHotkeys.h">
       <Filter>Header Files\FancyZonesData</Filter>
     </ClInclude>
@@ -249,6 +255,12 @@
       <Filter>Source Files\FancyZonesData</Filter>
     </ClCompile>
     <ClCompile Include="FancyZonesData\DefaultLayouts.cpp">
+      <Filter>Source Files\FancyZonesData</Filter>
+    </ClCompile>
+    <ClCompile Include="DockTree.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FancyZonesData\DockLayouts.cpp">
       <Filter>Source Files\FancyZonesData</Filter>
     </ClCompile>
     <ClCompile Include="FancyZonesData\LayoutHotkeys.cpp">

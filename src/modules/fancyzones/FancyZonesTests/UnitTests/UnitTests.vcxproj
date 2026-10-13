@@ -44,6 +44,7 @@
     <ClCompile Include="AppZoneHistoryTests.Spec.cpp" />
     <ClCompile Include="CustomLayoutsTests.Spec.cpp" />
     <ClCompile Include="DefaultLayoutsTests.Spec.cpp" />
+    <ClCompile Include="DockTree.Spec.cpp" />
     <ClCompile Include="FancyZonesSettings.Spec.cpp" />
     <ClCompile Include="JsonHelpers.Tests.cpp" />
     <ClCompile Include="Layout.Spec.cpp" />

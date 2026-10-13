@@ -2,12 +2,15 @@
 #include "WorkArea.h"
 
 #include <common/logger/logger.h>
+#include <common/utils/process_path.h>
 
 #include "FancyZonesData/AppliedLayouts.h"
 #include "FancyZonesData/AppZoneHistory.h"
 #include "FancyZonesData/CustomLayouts.h"
+#include "FancyZonesData/DockLayouts.h"
 #include "ZonesOverlay.h"
 #include "Settings.h"
+#include <FancyZonesLib/FancyZonesWindowProcessing.h>
 #include <FancyZonesLib/FancyZonesWindowProperties.h>
 #include <FancyZonesLib/VirtualDesktop.h>
 #include <FancyZonesLib/WindowUtils.h>
@@ -189,6 +192,7 @@ void WorkArea::ShowZones(const ZoneIndexSet& highlight, HWND draggedWindow/* = n
 
 void WorkArea::HideZones()
 {
+    m_dockPreview.reset();
     if (m_zonesOverlay)
     {
         m_zonesOverlay->Hide();
@@ -269,6 +273,244 @@ void WorkArea::CycleWindows(HWND window, bool reverse)
 {
     m_layoutWindows.CycleWindows(window, reverse);
 }
+
+#pragma region docking
+
+namespace
+{
+    // Space in pixels left between docked windows
+    constexpr int DockGap = 8;
+    // SizeWindowToRect moves windows asynchronously: a window isn't where it was sent right away
+    constexpr ULONGLONG PlacementSettleMillis = 1000;
+}
+
+Dock::Tree& WorkArea::DockTree() const
+{
+    return DockLayouts::instance().Tree(m_uniqueId);
+}
+
+void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
+{
+    if (!m_zonesOverlay)
+    {
+        return;
+    }
+
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const auto target = DockTree().TargetFromPoint(area, pt, DockGap);
+    if (!target)
+    {
+        HideZones();
+        return;
+    }
+
+    if (m_dockPreview && EqualRect(&m_dockPreview.value(), &target->preview))
+    {
+        return;
+    }
+
+    m_dockPreview = target->preview;
+
+    ZonesMap preview;
+    preview.emplace(0, Zone(target->preview, 0));
+    SetWorkAreaWindowAsTopmost(draggedWindow);
+    m_zonesOverlay->DrawActiveZoneSet(preview, { 0 }, Colors::GetZoneColors(), false);
+    m_zonesOverlay->Show();
+}
+
+bool WorkArea::DockWindow(HWND window, POINT pt)
+{
+    auto& tree = DockTree();
+    tree.Remove(window);
+
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    const auto target = tree.TargetFromPoint(area, pt, DockGap);
+    if (target)
+    {
+        tree.Insert(window, get_process_path(window), target.value());
+    }
+
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+    return target.has_value();
+}
+
+void WorkArea::DockAtEdge(HWND window, Dock::Edge edge)
+{
+    auto& tree = DockTree();
+    tree.Remove(window);
+    tree.Insert(window, get_process_path(window), Dock::Target{ .node = nullptr, .edge = edge });
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+}
+
+bool WorkArea::DockMove(HWND window, Dock::Edge direction)
+{
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    if (!DockTree().Move(window, area, DockGap, direction))
+    {
+        return false;
+    }
+
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+    return true;
+}
+
+bool WorkArea::UndockWindow(HWND window)
+{
+    if (!DockTree().Remove(window))
+    {
+        return false;
+    }
+
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+    return true;
+}
+
+bool WorkArea::DockResized(HWND window, const RECT& fromScreenRect)
+{
+    auto& tree = DockTree();
+    if (!tree.Find(window))
+    {
+        return false;
+    }
+
+    RECT rect{};
+    if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect))))
+    {
+        RECT fromRect = fromScreenRect;
+        MapWindowRect(nullptr, m_window, &fromRect);
+        MapWindowRect(nullptr, m_window, &rect);
+
+        const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+        if (tree.Resize(window, area, DockGap, fromRect, rect))
+        {
+            DockLayouts::instance().SaveData();
+        }
+    }
+
+    // Also puts the window back when it was resized on a side that has no neighbor
+    ApplyDockLayout();
+    return true;
+}
+
+bool WorkArea::DockSetHidden(HWND window, bool hidden)
+{
+    auto leaf = DockTree().Find(window);
+    if (!leaf || leaf->hidden == hidden)
+    {
+        return false;
+    }
+
+    leaf->hidden = hidden;
+    ApplyDockLayout();
+    return true;
+}
+
+bool WorkArea::DockClaim(HWND window)
+{
+    std::wstring app;
+    for (auto leaf : DockTree().Leaves())
+    {
+        if (leaf->window || leaf->app.empty())
+        {
+            continue;
+        }
+
+        if (app.empty())
+        {
+            if (!FancyZonesWindowProcessing::IsProcessableAutomatically(window))
+            {
+                return false;
+            }
+
+            app = get_process_path(window);
+        }
+
+        // ponytail: the first window of the app gets the slot, whatever it shows. Match on the title too if the wrong window of an app keeps landing in a slot.
+        if (leaf->app == app)
+        {
+            leaf->window = window;
+            leaf->placedAt = 0;
+            ApplyDockLayout();
+            DockLayouts::instance().SaveData();
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void WorkArea::DockRecall(Dock::Tree tree)
+{
+    DockTree() = std::move(tree);
+    ApplyDockLayout();
+    DockLayouts::instance().SaveData();
+}
+
+void WorkArea::ApplyDockLayout()
+{
+    // The work areas are recreated a moment after a virtual desktop switch: until then this one is not on screen
+    if (VirtualDesktop::instance().GetCurrentVirtualDesktopIdFromRegistry() != m_uniqueId.virtualDesktopId)
+    {
+        return;
+    }
+
+    auto& tree = DockTree();
+    const auto now = GetTickCount64();
+
+    // A window that was moved away without a drag (Windows Snap, Win+Shift+arrows, monitor rotation)
+    // leaves the layout, otherwise it would be pulled back
+    std::vector<HWND> movedAway;
+    for (const auto leaf : tree.Leaves())
+    {
+        const bool settled = leaf->placedAt != 0 && now - leaf->placedAt > PlacementSettleMillis;
+        if (!leaf->window || leaf->hidden || !settled)
+        {
+            continue;
+        }
+
+        const auto monitor = m_uniqueId.monitorId.monitor;
+        const bool onOtherMonitor = monitor && MonitorFromWindow(leaf->window, MONITOR_DEFAULTTONULL) != monitor;
+        if (onOtherMonitor || IsWindowArranged(leaf->window))
+        {
+            movedAway.push_back(leaf->window);
+        }
+    }
+
+    for (const auto window : movedAway)
+    {
+        tree.Remove(window);
+    }
+
+    const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
+    for (const auto& [window, rect] : tree.WindowRects(area, DockGap))
+    {
+        if (auto leaf = tree.Find(window); leaf && leaf->placedAt == 0)
+        {
+            leaf->placedAt = now;
+        }
+
+        // Moving a maximized window would restore it
+        if (FancyZonesWindowUtils::IsWindowMaximized(window))
+        {
+            continue;
+        }
+
+        const auto adjustedRect = FancyZonesWindowUtils::AdjustRectForSizeWindowToRect(window, rect, m_window);
+        FancyZonesWindowUtils::SaveWindowSizeAndOrigin(window);
+        FancyZonesWindowUtils::SizeWindowToRect(window, adjustedRect);
+    }
+
+    if (!movedAway.empty())
+    {
+        DockLayouts::instance().SaveData();
+    }
+}
+
+#pragma endregion
 
 #pragma region private
 

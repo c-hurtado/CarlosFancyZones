@@ -3,6 +3,7 @@
 #include <optional>
 #include <vector>
 
+#include <FancyZonesLib/DockTree.h>
 #include <FancyZonesLib/Layout.h>
 #include <FancyZonesLib/LayoutAssignedWindows.h>
 
@@ -61,6 +62,22 @@ public:
     
     void CycleWindows(HWND window, bool reverse);
 
+    // Docking. Points are in work area window coordinates.
+    Dock::Tree& DockTree() const;
+    void ShowDockPreview(POINT pt, HWND draggedWindow);
+    bool DockWindow(HWND window, POINT pt);
+    bool UndockWindow(HWND window);
+    // Docks the window against that edge of the work area
+    void DockAtEdge(HWND window, Dock::Edge edge);
+    // Swaps a docked window with its neighbor on that side. False when it has none.
+    bool DockMove(HWND window, Dock::Edge direction);
+    bool DockResized(HWND window, const RECT& fromScreenRect);
+    bool DockSetHidden(HWND window, bool hidden);
+    // Gives the window the empty slot kept for its app, if there is one
+    bool DockClaim(HWND window);
+    void DockRecall(Dock::Tree tree);
+    void ApplyDockLayout();
+
 protected:
     static LRESULT CALLBACK s_WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept;
 
@@ -79,4 +96,5 @@ private:
     std::unique_ptr<Layout> m_layout;
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;
+    std::optional<RECT> m_dockPreview; // Dock target currently drawn on the overlay
 };

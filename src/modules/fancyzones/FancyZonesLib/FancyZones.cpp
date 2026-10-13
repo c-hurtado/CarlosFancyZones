@@ -16,6 +16,7 @@
 #include <FancyZonesLib/FancyZonesData/AppZoneHistory.h>
 #include <FancyZonesLib/FancyZonesData/CustomLayouts.h>
 #include <FancyZonesLib/FancyZonesData/DefaultLayouts.h>
+#include <FancyZonesLib/FancyZonesData/DockLayouts.h>
 #include <FancyZonesLib/FancyZonesData/LastUsedVirtualDesktop.h>
 #include <FancyZonesLib/FancyZonesData/LayoutHotkeys.h>
 #include <FancyZonesLib/FancyZonesData/LayoutTemplates.h>
@@ -30,7 +31,6 @@
 #include <FancyZonesLib/trace.h>
 #include <FancyZonesLib/util.h>
 #include <FancyZonesLib/VirtualDesktop.h>
-#include <FancyZonesLib/WindowKeyboardSnap.h>
 #include <FancyZonesLib/WindowMouseSnap.h>
 #include <FancyZonesLib/WindowUtils.h>
 #include <FancyZonesLib/WorkArea.h>
@@ -163,6 +163,21 @@ namespace
     constexpr bool IsShiftKey(DWORD vkCode) noexcept
     {
         return vkCode == VK_SHIFT || vkCode == VK_LSHIFT || vkCode == VK_RSHIFT;
+    }
+
+    constexpr int DigitFromVkCode(DWORD vkCode) noexcept
+    {
+        if ('0' <= vkCode && vkCode <= '9')
+        {
+            return vkCode - '0';
+        }
+
+        if (VK_NUMPAD0 <= vkCode && vkCode <= VK_NUMPAD9)
+        {
+            return vkCode - VK_NUMPAD0;
+        }
+
+        return -1;
     }
 
     size_t GetMonitorDisplayNumber(HMONITOR monitor, size_t fallback) noexcept
@@ -312,6 +327,20 @@ public:
                 PostMessageW(m_window, WM_PRIV_WINDOWDESTROYED, wparam, lparam);
             }
             break;
+
+        case EVENT_SYSTEM_MINIMIZESTART:
+            PostMessageW(m_window, WM_PRIV_DOCK_VISIBILITY, wparam, TRUE);
+            break;
+        case EVENT_SYSTEM_MINIMIZEEND:
+            PostMessageW(m_window, WM_PRIV_DOCK_VISIBILITY, wparam, FALSE);
+            break;
+        case EVENT_OBJECT_HIDE:
+        case EVENT_OBJECT_CLOAKED:
+            if (data->idObject == OBJID_WINDOW)
+            {
+                PostMessageW(m_window, WM_PRIV_DOCK_VISIBILITY, wparam, FALSE);
+            }
+            break;
         }
     }
 
@@ -357,12 +386,16 @@ private:
     bool MoveToAppLastZone(HWND window, HMONITOR monitor, GUID currentVirtualDesktop) noexcept;
 
     void RefreshLayouts() noexcept;
-    bool ShouldProcessSnapHotkey(DWORD vkCode) noexcept;
     void ApplyQuickLayout(int key) noexcept;
     void CycleLayoutByWheel(bool reverse) noexcept;
     std::optional<LayoutData> NextWheelLayout(const WorkArea& workArea, bool reverse) const noexcept;
     void SwitchLayout(WorkArea* workArea, const LayoutData& layout) noexcept;
     void FlashZones() noexcept;
+
+    void DockClaim(HWND window) noexcept;
+    void DockVisibility(HWND window, bool minimizing) noexcept;
+    void DockSlot(int key, bool save) noexcept;
+    void DockMoveByKey(DWORD vkCode) noexcept;
 
     HMONITOR WorkAreaKeyFromWindow(HWND window) noexcept;
 
@@ -372,7 +405,9 @@ private:
 
     HWND m_window{};
     std::unique_ptr<WindowMouseSnap> m_windowMouseSnapper{};
-    WindowKeyboardSnap m_windowKeyboardSnapper{};
+    HWND m_resizedWindow{}; // Window being resized by the user
+    RECT m_resizedWindowRect{}; // Its frame when the resize started
+    DWORD m_dockSlotKey{}; // Digit of the dock layout hotkey that is held down
     WorkAreaConfiguration m_workAreaConfiguration;
     DraggingState m_draggingState;
     bool m_monitorRotationPreviewActive = false;
@@ -509,6 +544,7 @@ FancyZones::VirtualDesktopChanged() noexcept
 
 void FancyZones::MoveSizeStart(HWND window, HMONITOR monitor)
 {
+    m_resizedWindow = nullptr;
     m_windowMouseSnapper = WindowMouseSnap::Create(window, m_workAreaConfiguration.GetAllWorkAreas(), m_notificationUtil.get());
     if (m_windowMouseSnapper)
     {
@@ -520,6 +556,10 @@ void FancyZones::MoveSizeStart(HWND window, HMONITOR monitor)
         m_draggingState.Enable();
         m_draggingState.UpdateDraggingState();
         m_windowMouseSnapper->MoveSizeStart(monitor, m_draggingState.IsDragging());
+    }
+    else if (FancyZonesWindowUtils::IsCursorTypeIndicatingSizeEvent() && SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &m_resizedWindowRect, sizeof(m_resizedWindowRect))))
+    {
+        m_resizedWindow = window;
     }
 }
 
@@ -543,6 +583,20 @@ void FancyZones::MoveSizeEnd()
     {
         m_windowMouseSnapper->MoveSizeEnd();
         m_windowMouseSnapper = nullptr;
+    }
+
+    if (m_resizedWindow)
+    {
+        // Resizing a docked window resizes its neighbors
+        for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+        {
+            if (workArea && workArea->DockResized(m_resizedWindow, m_resizedWindowRect))
+            {
+                break;
+            }
+        }
+
+        m_resizedWindow = nullptr;
     }
 
     // Always disable dragging state, even if m_windowMouseSnapper was already null.
@@ -611,7 +665,11 @@ bool FancyZones::MoveToAppLastZone(HWND window, HMONITOR monitor, GUID currentVi
 
 void FancyZones::WindowCreated(HWND window) noexcept
 {
-    const bool moveToAppLastZone = FancyZonesSettings::settings().appLastZone_moveWindows;
+    DockVisibility(window, false);
+    DockClaim(window);
+
+    // Docking replaces zones, a new window goes to the slot kept for its app instead
+    const bool moveToAppLastZone = false;
     const bool openOnActiveMonitor = FancyZonesSettings::settings().openWindowOnActiveMonitor;
     if (!moveToAppLastZone && !openOnActiveMonitor)
     {
@@ -730,17 +788,34 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
         PostMessageW(m_window, WM_PRIV_MONITOR_ROTATION_PREVIEW_HIDE, 0, 0);
     }
 
-    if ((win && !shift && !ctrl) || (win && ctrl && alt))
+    // Win+arrows move the foreground window in the dock layout
+    if (win && !shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
     {
-        if ((info->vkCode == VK_RIGHT) || (info->vkCode == VK_LEFT) || (info->vkCode == VK_UP) || (info->vkCode == VK_DOWN))
+        if (info->vkCode == VK_LEFT || info->vkCode == VK_RIGHT || info->vkCode == VK_UP || info->vkCode == VK_DOWN)
         {
-            if (ShouldProcessSnapHotkey(info->vkCode))
+            if (FancyZonesWindowProcessing::IsProcessableManually(GetForegroundWindow()))
             {
-                Trace::FancyZones::OnKeyDown(info->vkCode, win, ctrl, false /*inMoveSize*/);
-                // Win+Left, Win+Right will cycle through Zones in the active ZoneSet when WM_PRIV_SNAP_HOTKEY's handled
                 PostMessageW(m_window, WM_PRIV_SNAP_HOTKEY, 0, info->vkCode);
                 return true;
             }
+        }
+    }
+
+    if (win && ctrl && alt)
+    {
+        const int digit = DigitFromVkCode(info->vkCode);
+        // Win+Ctrl+Alt+Shift+digit saves the dock layout, Win+Ctrl+Alt+digit recalls it.
+        // The digit isn't swallowed when there is nothing to recall.
+        if (digit != -1 && (shift || DockLayouts::instance().HasSlot(digit)))
+        {
+            // Not while a window is dragged (Shift is held to dock), and once per key press
+            if (!m_windowMouseSnapper && m_dockSlotKey != info->vkCode)
+            {
+                m_dockSlotKey = info->vkCode;
+                PostMessageW(m_window, WM_PRIV_DOCK_SLOT, shift, digit);
+            }
+
+            return true;
         }
     }
 
@@ -794,6 +869,10 @@ FancyZones::OnKeyUp(PKBDLLHOOKSTRUCT info) noexcept
     const bool wasMonitorRotationPreviewActive = m_monitorRotationPreviewActive;
     const bool isActivatorKey = IsMonitorRotationActivatorKey(info->vkCode);
     const bool wasConsumed = m_monitorRotationKeyState.ReleaseWasConsumed(info->vkCode);
+    if (info->vkCode == m_dockSlotKey)
+    {
+        m_dockSlotKey = 0;
+    }
     m_monitorRotationKeyState.Update(info->vkCode, false);
 
     if (wasMonitorRotationPreviewActive && !IsMonitorRotationChordDown())
@@ -942,40 +1021,7 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
         if (message == WM_PRIV_SNAP_HOTKEY)
         {
-            // We already checked in ShouldProcessSnapHotkey whether the foreground window is a candidate for zoning
-            auto foregroundWindow = GetForegroundWindow();
-
-            HMONITOR monitor{ nullptr };
-            if (!FancyZonesSettings::settings().spanZonesAcrossMonitors)
-            {
-                monitor = MonitorFromWindow(foregroundWindow, MONITOR_DEFAULTTONULL);
-            }
-
-            if (FancyZonesSettings::settings().moveWindowsBasedOnPosition)
-            {
-                auto monitors = FancyZonesUtils::GetAllMonitorRects<&MONITORINFOEX::rcWork>();
-                RECT windowRect;
-                if (GetWindowRect(foregroundWindow, &windowRect))
-                {
-                    // Check whether Alt is used in the shortcut key combination
-                    if (GetAsyncKeyState(VK_MENU) & 0x8000)
-                    {
-                        m_windowKeyboardSnapper.Extend(foregroundWindow, windowRect, monitor, static_cast<DWORD>(lparam), m_workAreaConfiguration.GetAllWorkAreas());
-                    }
-                    else
-                    {
-                        m_windowKeyboardSnapper.Snap(foregroundWindow, windowRect, monitor, static_cast<DWORD>(lparam), m_workAreaConfiguration.GetAllWorkAreas(), monitors);
-                    }
-                }
-                else
-                {
-                    Logger::error("Error snapping window by keyboard shortcut: failed to get window rect");
-                }
-            }
-            else
-            {
-                m_windowKeyboardSnapper.Snap(foregroundWindow, monitor, static_cast<DWORD>(lparam), m_workAreaConfiguration.GetAllWorkAreas(), FancyZonesUtils::GetMonitorsOrdered());
-            }
+            DockMoveByKey(static_cast<DWORD>(lparam));
         }
         else if (message == WM_PRIV_INIT)
         {
@@ -1026,6 +1072,31 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                 Logger::info(L"Window destroyed during drag - aborting drag");
                 AbortMoveSize();
             }
+
+            if (m_resizedWindow == hwnd)
+            {
+                m_resizedWindow = nullptr;
+            }
+
+            // The window can be docked on a virtual desktop that isn't the current one
+            if (DockLayouts::instance().RemoveWindow(hwnd))
+            {
+                for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+                {
+                    if (workArea)
+                    {
+                        workArea->ApplyDockLayout();
+                    }
+                }
+            }
+        }
+        else if (message == WM_PRIV_DOCK_VISIBILITY)
+        {
+            DockVisibility(reinterpret_cast<HWND>(wparam), lparam != 0);
+        }
+        else if (message == WM_PRIV_DOCK_SLOT)
+        {
+            DockSlot(static_cast<int>(lparam), wparam != 0);
         }
         else if (message == WM_PRIV_LAYOUT_HOTKEYS_FILE_UPDATE)
         {
@@ -1302,14 +1373,26 @@ void FancyZones::UpdateWorkAreas(bool updateWindowPositions) noexcept
         }
     }
 
-    if (updateWindowPositions)
+    // The layouts weren't kept up to date while their virtual desktop wasn't the current one
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
     {
-        for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+        if (workArea)
         {
-            if (workArea)
-            {
-                workArea->UpdateWindowPositions();
-            }
+            DockLayouts::Refresh(workArea->DockTree());
+        }
+    }
+
+    // Windows opened while FancyZones wasn't running take the slots kept for their apps
+    for (const auto& window : VirtualDesktop::instance().GetWindowsFromCurrentDesktop())
+    {
+        DockClaim(window);
+    }
+
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (workArea)
+        {
+            workArea->ApplyDockLayout();
         }
     }
 }
@@ -1650,50 +1733,6 @@ void FancyZones::RefreshLayouts() noexcept
     }
 }
 
-bool FancyZones::ShouldProcessSnapHotkey(DWORD vkCode) noexcept
-{
-    if (!FancyZonesSettings::settings().overrideSnapHotkeys)
-    {
-        return false;
-    }
-
-    auto window = GetForegroundWindow();
-    if (!FancyZonesWindowProcessing::IsProcessableManually(window))
-    {
-        return false;
-    }
-
-    HMONITOR monitor = WorkAreaKeyFromWindow(window);
-
-    auto workArea = m_workAreaConfiguration.GetWorkArea(monitor);
-    if (!workArea)
-    {
-        Logger::error(L"No work area for processing snap hotkey");
-        return false;
-    }
-
-    const auto& layout = workArea->GetLayout();
-    if (!layout)
-    {
-        Logger::error(L"No layout for processing snap hotkey");
-        return false;
-    }
-
-    if (layout->Zones().size() > 0)
-    {
-        if (vkCode == VK_UP || vkCode == VK_DOWN)
-        {
-            return FancyZonesSettings::settings().moveWindowsBasedOnPosition;
-        }
-        else
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 void FancyZones::ApplyQuickLayout(int key) noexcept
 {
     auto layoutId = LayoutHotkeys::instance().GetLayoutId(key);
@@ -1797,6 +1836,153 @@ void FancyZones::FlashZones() noexcept
             }
         }
     }
+}
+
+void FancyZones::DockClaim(HWND window) noexcept
+{
+    const auto& workAreas = m_workAreaConfiguration.GetAllWorkAreas();
+    for (const auto& [_, workArea] : workAreas)
+    {
+        if (workArea && workArea->DockTree().Find(window))
+        {
+            return;
+        }
+    }
+
+    for (const auto& [_, workArea] : workAreas)
+    {
+        if (workArea && workArea->DockClaim(window))
+        {
+            return;
+        }
+    }
+}
+
+void FancyZones::DockVisibility(HWND window, bool minimizing) noexcept
+{
+    const bool hidden = minimizing || DockLayouts::IsHidden(window);
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (workArea)
+        {
+            workArea->DockSetHidden(window, hidden);
+        }
+    }
+}
+
+void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
+{
+    const auto window = GetForegroundWindow();
+    if (!FancyZonesWindowProcessing::IsProcessableManually(window))
+    {
+        return;
+    }
+
+    const auto edge = vkCode == VK_LEFT ? Dock::Edge::Left : vkCode == VK_RIGHT ? Dock::Edge::Right : vkCode == VK_UP ? Dock::Edge::Top : Dock::Edge::Bottom;
+    const auto& workAreas = m_workAreaConfiguration.GetAllWorkAreas();
+
+    WorkArea* current = nullptr;
+    for (const auto& [_, workArea] : workAreas)
+    {
+        if (workArea && workArea->DockTree().Find(window))
+        {
+            current = workArea.get();
+        }
+    }
+
+    if (!current)
+    {
+        // Not docked yet: dock it on that side of its monitor
+        if (const auto workArea = m_workAreaConfiguration.GetWorkAreaFromWindow(window))
+        {
+            if (FancyZonesWindowUtils::IsWindowMaximized(window))
+            {
+                ShowWindow(window, SW_RESTORE);
+            }
+
+            workArea->DockAtEdge(window, edge);
+        }
+
+        return;
+    }
+
+    if (current->DockMove(window, edge))
+    {
+        return;
+    }
+
+    // No neighbor on that side: go on to the monitor on that side, entering it by the edge the window comes from
+    const auto toRect = [](const FancyZonesUtils::Rect& rect) { return RECT{ rect.left(), rect.top(), rect.right(), rect.bottom() }; };
+    const RECT from = toRect(current->GetWorkAreaRect());
+    WorkArea* next = nullptr;
+    LONG nearest = 0;
+    for (const auto& [_, workArea] : workAreas)
+    {
+        if (!workArea || workArea.get() == current)
+        {
+            continue;
+        }
+
+        const RECT to = toRect(workArea->GetWorkAreaRect());
+        const bool sideways = edge == Dock::Edge::Left || edge == Dock::Edge::Right;
+        const LONG distance = edge == Dock::Edge::Left ? from.left - to.right : edge == Dock::Edge::Right ? to.left - from.right : edge == Dock::Edge::Top ? from.top - to.bottom : to.top - from.bottom;
+        const LONG overlap = sideways ? (std::min)(from.bottom, to.bottom) - (std::max)(from.top, to.top) : (std::min)(from.right, to.right) - (std::max)(from.left, to.left);
+        if (distance >= 0 && overlap > 0 && (!next || distance < nearest))
+        {
+            next = workArea.get();
+            nearest = distance;
+        }
+    }
+
+    if (next)
+    {
+        const auto opposite = edge == Dock::Edge::Left ? Dock::Edge::Right : edge == Dock::Edge::Right ? Dock::Edge::Left : edge == Dock::Edge::Top ? Dock::Edge::Bottom : Dock::Edge::Top;
+        current->UndockWindow(window);
+        next->DockAtEdge(window, opposite);
+    }
+}
+
+void FancyZones::DockSlot(int key, bool save) noexcept
+{
+    auto workArea = m_workAreaConfiguration.GetWorkAreaFromCursor();
+    if (!workArea)
+    {
+        return;
+    }
+
+    if (save)
+    {
+        DockLayouts::instance().SaveSlot(key, workArea->DockTree());
+        workArea->ShowLayoutNameLabel(L"Dock layout " + std::to_wstring(key) + L" saved");
+        return;
+    }
+
+    auto tree = DockLayouts::instance().Slot(key);
+    if (!tree)
+    {
+        return;
+    }
+
+    // A window is docked in one place only
+    for (const auto leaf : tree->Leaves())
+    {
+        for (const auto& [_, other] : m_workAreaConfiguration.GetAllWorkAreas())
+        {
+            if (other && other.get() != workArea)
+            {
+                other->UndockWindow(leaf->window);
+            }
+        }
+    }
+
+    workArea->DockRecall(std::move(tree.value()));
+
+    for (const auto& window : VirtualDesktop::instance().GetWindowsFromCurrentDesktop())
+    {
+        DockClaim(window);
+    }
+
+    workArea->ShowLayoutNameLabel(L"Dock layout " + std::to_wstring(key));
 }
 
 HMONITOR FancyZones::WorkAreaKeyFromWindow(HWND window) noexcept

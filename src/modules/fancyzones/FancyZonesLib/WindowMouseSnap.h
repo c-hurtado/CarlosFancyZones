@@ -1,6 +1,5 @@
 #pragma once
 
-#include <FancyZonesLib/HighlightedZones.h>
 #include <common/notifications/NotificationUtil.h>
 
 class WorkArea;
@@ -45,6 +44,4 @@ private:
     WorkArea* m_currentWorkArea; // "Active" WorkArea, where the move/size is happening. Will update as drag moves between monitors.
     
     bool m_snappingMode{ false };
-
-    HighlightedZones m_highlightedZones;
 };

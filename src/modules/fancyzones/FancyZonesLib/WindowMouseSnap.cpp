@@ -1,14 +1,11 @@
 #include "pch.h"
 #include "WindowMouseSnap.h"
 
-#include <FancyZonesLib/FancyZonesData/AppZoneHistory.h>
 #include <FancyZonesLib/FancyZonesWindowProcessing.h>
 #include <FancyZonesLib/FancyZonesWindowProperties.h>
 #include <FancyZonesLib/Settings.h>
 #include <FancyZonesLib/WindowUtils.h>
 #include <FancyZonesLib/WorkArea.h>
-
-#include <FancyZonesLib/trace.h>
 
 #include <common/utils/elevation.h>
 #include <common/utils/resources.h>
@@ -63,19 +60,20 @@ bool WindowMouseSnap::MoveSizeStart(HMONITOR monitor, bool isSnapping)
 
     SwitchSnappingMode(isSnapping);
 
-    if (m_currentWorkArea)
+    // A window that is moved leaves the dock layout, wherever it was docked
+    for (const auto& [_, workArea] : m_activeWorkAreas)
     {
-        m_currentWorkArea->Unsnap(m_window);
+        if (workArea)
+        {
+            workArea->UndockWindow(m_window);
+        }
     }
-    
+
     return true;
 }
 
-void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bool isSnapping, bool isSelectManyZonesState)
+void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bool isSnapping, bool /*isSelectManyZonesState*/)
 {
-    // Enter snapping mode before calculating highlights. The transition resets m_highlightedZones;
-    // doing it after Update discards the zone selected by the first Shift-triggered update and makes
-    // snapping depend on an otherwise unnecessary second mouse move.
     SwitchSnappingMode(isSnapping);
 
     auto iter = m_activeWorkAreas.find(monitor);
@@ -85,20 +83,11 @@ void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bo
         // Change work area
         if (iter->second.get() != m_currentWorkArea)
         {
-            m_highlightedZones.Reset();
-
             if (m_currentWorkArea)
             {
-                if (!FancyZonesSettings::settings().showZonesOnAllMonitors)
-                {
-                    m_currentWorkArea->HideZones();
-                }
-                else
-                {
-                    m_currentWorkArea->ShowZones({}, m_window);
-                }
+                m_currentWorkArea->HideZones();
             }
-            
+
             m_currentWorkArea = iter->second.get();
         }
 
@@ -106,30 +95,24 @@ void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bo
         {
             POINT ptClient = ptScreen;
             MapWindowPoints(nullptr, m_currentWorkArea->GetWorkAreaWindow(), &ptClient, 1);
-            const bool redraw = m_highlightedZones.Update(m_currentWorkArea->GetLayout().get(), ptClient, isSelectManyZonesState);
-            if (redraw)
-            {
-                m_currentWorkArea->ShowZones(m_highlightedZones.Zones(), m_window);
-            }
+            m_currentWorkArea->ShowDockPreview(ptClient, m_window);
         }
     }
 }
 
 void WindowMouseSnap::MoveSizeEnd()
 {
-    if (m_snappingMode)
+    // Don't dock a maximized window: this is a Chromium based tab that is merged back with an existing window
+    // or the window is maximized by Windows when the cursor hits the screen top border
+    bool docked = false;
+    POINT pt{};
+    if (m_snappingMode && m_currentWorkArea && !FancyZonesWindowUtils::IsWindowMaximized(m_window) && GetPhysicalCursorPos(&pt))
     {
-        if (FancyZonesWindowUtils::IsWindowMaximized(m_window))
-        {
-            // Abort the zoning, this is a Chromium based tab that is merged back with an existing window
-            // or if the window is maximized by Windows when the cursor hits the screen top border
-        }
-        else if (m_currentWorkArea)
-        {
-            m_currentWorkArea->Snap(m_window, m_highlightedZones.Zones());
-        }
+        MapWindowPoints(nullptr, m_currentWorkArea->GetWorkAreaWindow(), &pt, 1);
+        docked = m_currentWorkArea->DockWindow(m_window, pt);
     }
-    else
+
+    if (!docked)
     {
         FancyZonesWindowUtils::ResetRoundCornersPreference(m_window);
         if (FancyZonesSettings::settings().restoreSize)
@@ -151,8 +134,8 @@ void WindowMouseSnap::MoveSizeEnd()
 void WindowMouseSnap::Abort()
 {
     // End the drag WITHOUT snapping the window into a zone. Used when the dragged
-    // window is destroyed mid-drag: snapping a now-dead HWND would corrupt zone
-    // state, so we only tear down the overlays, highlights, and transparency.
+    // window is destroyed mid-drag: docking a now-dead HWND would corrupt the
+    // layout, so we only tear down the overlays and transparency.
     SwitchSnappingMode(false);
 }
 
@@ -160,47 +143,18 @@ void WindowMouseSnap::SwitchSnappingMode(bool isSnapping)
 {
     if (!m_snappingMode && isSnapping) // turn on
     {
-        m_highlightedZones.Reset();
         SetWindowTransparency();
-
-        if (FancyZonesSettings::settings().showZonesOnAllMonitors)
-        {
-            for (const auto& [_, workArea] : m_activeWorkAreas)
-            {
-                if (workArea)
-                {
-                    workArea->ShowZones({}, m_window);
-                }
-            }
-        }
-        else if (m_currentWorkArea)
-        {
-            m_currentWorkArea->ShowZones({}, m_window);
-        }
-
-        if (m_currentWorkArea)
-        {
-            m_currentWorkArea->Unsnap(m_window);
-            Trace::WorkArea::MoveOrResizeStarted(m_currentWorkArea->GetLayout().get(), m_currentWorkArea->GetLayoutWindows());
-        }
     }
     else if (m_snappingMode && !isSnapping) // turn off
     {
         ResetWindowTransparency();
-        m_highlightedZones.Reset();
 
-        // Hide all layouts (regardless of settings)
         for (auto& [_, workArea] : m_activeWorkAreas)
         {
             if (workArea)
             {
                 workArea->HideZones();
             }
-        }
-
-        if (m_currentWorkArea)
-        {
-            Trace::WorkArea::MoveOrResizeEnd(m_currentWorkArea->GetLayout().get(), m_currentWorkArea->GetLayoutWindows());
         }
     }
 
