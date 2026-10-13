@@ -215,6 +215,19 @@ namespace FancyZonesUnitTests
             CustomAssert::AreEqual(RECT{ 500, 0, 1000, 400 }, RectOf(tree, m_a));
         }
 
+        TEST_METHOD (EdgeBandsSetWhereWindowDocks)
+        {
+            auto tree = SideBySide();
+
+            // 100 px from the bottom edge of the work area: inside a 150 px band, outside the default one
+            const auto wide = tree.TargetFromPoint(m_area, { 750, 700 }, 0, 150);
+            Assert::IsTrue(wide.has_value());
+            CustomAssert::AreEqual(RECT{ 0, 400, 1000, 800 }, wide->preview);
+
+            // 12.5% into the window from its bottom edge: outside a 10% band
+            Assert::IsFalse(tree.TargetFromPoint(m_area, { 750, 700 }, 0, 48, 0.1f).has_value());
+        }
+
         TEST_METHOD (GapIsLeftBetweenWindows)
         {
             const auto tree = SideBySide();

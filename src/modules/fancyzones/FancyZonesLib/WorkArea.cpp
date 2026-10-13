@@ -278,8 +278,16 @@ void WorkArea::CycleWindows(HWND window, bool reverse)
 
 namespace
 {
-    // Space in pixels left between docked windows
-    constexpr int DockGap = 8;
+    int DockGap() noexcept
+    {
+        return FancyZonesSettings::settings().dockGap;
+    }
+
+    std::optional<Dock::Target> DockTarget(Dock::Tree& tree, const RECT& area, POINT pt)
+    {
+        const auto& settings = FancyZonesSettings::settings();
+        return tree.TargetFromPoint(area, pt, settings.dockGap, settings.dockEdgeBand, settings.dockWindowEdgePercent / 100.0f);
+    }
     // SizeWindowToRect moves windows asynchronously: a window isn't where it was sent right away
     constexpr ULONGLONG PlacementSettleMillis = 1000;
 }
@@ -297,7 +305,7 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
     }
 
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-    const auto target = DockTree().TargetFromPoint(area, pt, DockGap);
+    const auto target = DockTarget(DockTree(), area, pt);
     if (!target)
     {
         HideZones();
@@ -324,7 +332,7 @@ bool WorkArea::DockWindow(HWND window, POINT pt)
     tree.Remove(window);
 
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-    const auto target = tree.TargetFromPoint(area, pt, DockGap);
+    const auto target = DockTarget(tree, area, pt);
     if (target)
     {
         tree.Insert(window, get_process_path(window), target.value());
@@ -347,7 +355,7 @@ void WorkArea::DockAtEdge(HWND window, Dock::Edge edge)
 bool WorkArea::DockMove(HWND window, Dock::Edge direction)
 {
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-    if (!DockTree().Move(window, area, DockGap, direction))
+    if (!DockTree().Move(window, area, DockGap(), direction))
     {
         return false;
     }
@@ -385,7 +393,7 @@ bool WorkArea::DockResized(HWND window, const RECT& fromScreenRect)
         MapWindowRect(nullptr, m_window, &rect);
 
         const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-        if (tree.Resize(window, area, DockGap, fromRect, rect))
+        if (tree.Resize(window, area, DockGap(), fromRect, rect))
         {
             DockLayouts::instance().SaveData();
         }
@@ -486,7 +494,7 @@ void WorkArea::ApplyDockLayout()
     }
 
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
-    for (const auto& [window, rect] : tree.WindowRects(area, DockGap))
+    for (const auto& [window, rect] : tree.WindowRects(area, DockGap()))
     {
         if (auto leaf = tree.Find(window); leaf && leaf->placedAt == 0)
         {

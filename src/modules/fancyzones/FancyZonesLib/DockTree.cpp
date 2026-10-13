@@ -9,11 +9,6 @@ using namespace Dock;
 
 namespace
 {
-    // Distance in pixels from a work area edge within which a window docks against the whole work area
-    constexpr LONG WorkAreaEdgeBand = 48;
-    // Share of a docked window, counted from each of its edges, within which a window docks against it.
-    // The middle of the window is left free, so a window can be dropped there without docking.
-    constexpr float WindowEdgeShare = 0.3f;
     constexpr float MinRatio = 0.1f;
 
     bool IsEmptySlot(const Node& node) noexcept
@@ -212,7 +207,7 @@ Node* Tree::Find(HWND window) const
     return nullptr;
 }
 
-std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap)
+std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap, LONG edgeBand, float windowEdgeShare)
 {
     if (!PtInRect(&area, pt))
     {
@@ -226,7 +221,7 @@ std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap)
         { area.bottom - pt.y, Edge::Bottom },
     } };
     const auto nearestAreaEdge = *std::min_element(areaEdges.begin(), areaEdges.end());
-    if (nearestAreaEdge.first < WorkAreaEdgeBand)
+    if (nearestAreaEdge.first < edgeBand)
     {
         return Target{ .node = nullptr, .edge = nearestAreaEdge.second, .fill = false, .preview = HalfAt(area, nearestAreaEdge.second) };
     }
@@ -273,7 +268,7 @@ std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap)
             { (rect.bottom - pt.y) / height, Edge::Bottom },
         } };
         const auto nearestEdge = *std::min_element(edges.begin(), edges.end());
-        if (nearestEdge.first <= WindowEdgeShare)
+        if (nearestEdge.first <= windowEdgeShare)
         {
             target = Target{ .node = &node, .edge = nearestEdge.second, .fill = false, .preview = HalfAt(rect, nearestEdge.second) };
         }

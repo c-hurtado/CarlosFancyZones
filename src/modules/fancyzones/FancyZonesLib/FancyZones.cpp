@@ -1167,6 +1167,15 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         else if (message == WM_PRIV_SETTINGS_CHANGED)
         {
             FancyZonesSettings::instance().LoadSettings();
+
+            // The gap between docked windows may have changed
+            for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+            {
+                if (workArea)
+                {
+                    workArea->ApplyDockLayout();
+                }
+            }
         }
         else if (message == WM_PRIV_SAVE_EDITOR_PARAMETERS)
         {

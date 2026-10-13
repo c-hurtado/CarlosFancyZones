@@ -50,6 +50,9 @@ namespace NonLocalizable
     const wchar_t MonitorRotationHotkeyID[] = L"fancyzones_monitorRotation_hotkey";
     const wchar_t ExcludedAppsID[] = L"fancyzones_excluded_apps";
     const wchar_t ZoneHighlightOpacityID[] = L"fancyzones_highlight_opacity";
+    const wchar_t DockGapID[] = L"fancyzones_dockGap";
+    const wchar_t DockEdgeBandID[] = L"fancyzones_dockEdgeBand";
+    const wchar_t DockWindowEdgePercentID[] = L"fancyzones_dockWindowEdgePercent";
     const wchar_t ShowZoneNumberID[] = L"fancyzones_showZoneNumber";
     const wchar_t LayoutNameLabelEnabledID[] = L"fancyzones_layoutNameLabelEnabled";
     const wchar_t LayoutNameLabelPlacementID[] = L"fancyzones_layoutNameLabelPlacement";
@@ -189,6 +192,22 @@ void FancyZonesSettings::LoadSettings()
 
         // layout name label
         SetBoolFlag(values, NonLocalizable::LayoutNameLabelEnabledID, SettingId::LayoutNameLabelEnabled, m_settings.layoutNameLabelEnabled);
+
+        // Read when a window is docked or the layout is applied: no observer needs to hear about them
+        if (auto val = values.get_int_value(NonLocalizable::DockGapID))
+        {
+            m_settings.dockGap = std::clamp(*val, 0, 100);
+        }
+
+        if (auto val = values.get_int_value(NonLocalizable::DockEdgeBandID))
+        {
+            m_settings.dockEdgeBand = std::clamp(*val, 8, 500);
+        }
+
+        if (auto val = values.get_int_value(NonLocalizable::DockWindowEdgePercentID))
+        {
+            m_settings.dockWindowEdgePercent = std::clamp(*val, 5, 50);
+        }
 
         if (auto val = values.get_int_value(NonLocalizable::LayoutNameLabelPlacementID))
         {

@@ -64,6 +64,9 @@ struct Settings
     std::wstring zoneHighlightColor = L"#008CFF";
     std::wstring zoneNumberColor = L"#000000";
     int zoneHighlightOpacity = 50;
+    int dockGap = 8; // Pixels left between docked windows
+    int dockEdgeBand = 48; // Pixels from a work area edge within which a window docks against the whole work area
+    int dockWindowEdgePercent = 30; // Share of a docked window, from each of its edges, within which a window docks against it
     bool layoutNameLabelEnabled = true;
     LayoutNameLabelPlacement layoutNameLabelPlacement = LayoutNameLabelPlacement::TopCenter;
     std::wstring layoutNameLabelTextColor = L"#FFFFFF";
