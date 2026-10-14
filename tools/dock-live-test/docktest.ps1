@@ -1,7 +1,19 @@
 # Live check of the dock fork: drives real test windows with synthetic mouse and keyboard input.
 param([string]$Exe = "$PSScriptRoot\..\..\x64\Debug\FanciestZones.exe", [switch]$NoInput,
     # 0: the primary monitor, 1: the other one
-    [int]$Monitor = 0)
+    [int]$Monitor = 0,
+    # Sections to run, all of them when empty: dock, resize, slots, monitors, keys, close.
+    # A and B are always docked side by side first. Sections that need the state an earlier one leaves bring it along.
+    [string[]]$Only = @())
+
+$sections = 'dock', 'resize', 'slots', 'monitors', 'keys', 'close'
+if (!$Only) { $Only = $sections }
+$unknown = $Only | Where-Object { $_ -notin $sections }
+if ($unknown) { "Unknown section '$($unknown -join ', ')'. Sections: $($sections -join ', ')"; return }
+if ($Only -contains 'keys' -and $Only -contains 'dock') { $Only += 'monitors' }
+if ($Only -contains 'monitors') { $Only += 'slots' }
+if ($Only | Where-Object { $_ -in 'resize', 'slots' }) { $Only += 'dock' }
+function Want($name) { $script:Only -contains $name }
 
 Add-Type @'
 using System;
@@ -154,6 +166,7 @@ try {
     CheckFrame 'B filled the empty right half' $b.Handle ($midX + 4) $waT $waR $waB
     CheckFrame 'A stayed put' $a.Handle $waL $waT ($midX - 4) $waB
 
+    if (Want 'dock') {
     DragWindow $c.Handle ($waL + [int]($Wd * 0.75)) ($waB - 130) -Shift
     CheckFrame 'C split B at its bottom edge' $c.Handle ($midX + 4) ($midY + 4) $waR $waB
     CheckFrame 'B kept the top' $b.Handle ($midX + 4) $waT $waR ($midY - 4)
@@ -164,6 +177,9 @@ try {
     CheckFrame 'C restored to its place' $c.Handle ($midX + 4) ($midY + 4) $waR $waB
     CheckFrame 'B back to the top' $b.Handle ($midX + 4) $waT $waR ($midY - 4)
 
+    }
+
+    if (Want 'resize') {
     # Resize A by its right border: the neighbors follow
     RaiseAt $a.Handle ((FrameRect $a.Handle).R + 2) ($waT + 300)
     $newRight = $waL + [int]($Wd * 0.4)
@@ -179,6 +195,9 @@ try {
     CheckSame 'Resizing B bottom left A alone' (Frame $a.Handle) $aBefore
     CheckSame 'C follows B bottom (gap kept)' "$((FrameRect $c.Handle).T - (FrameRect $b.Handle).B)" '8' 2
 
+    }
+
+    if (Want 'slots') {
     # Save layout 1, undock B by a drag without Shift, recall layout 1
     [W]::Move($midX, $midY); Start-Sleep -Milliseconds 200
     Chord @(0x5B, 0x11, 0x12, 0x10, 0x31)
@@ -204,7 +223,9 @@ try {
     $c2 = NewWindow 'DockTestC2' ($waL + 900) ($waT + 400); Start-Sleep -Milliseconds 1500
     CheckSame 'New window of the app took the kept slot' (Frame $c2.Handle) $cDocked
 
-    if ($other) {
+    }
+
+    if ($other -and (Want 'monitors')) {
         # A docked window moved to the other monitor without a drag leaves the layout instead of being pulled back
         [void][W]::SetWindowPos($c2.Handle, [IntPtr]::Zero, $other.L + 300, $other.T + 300, 900, 600, 0x0004 -bor 0x0010); Start-Sleep -Milliseconds 1200
         $moved = Frame $c2.Handle
@@ -223,6 +244,15 @@ try {
         DragWindow $b.Handle ($waR - 20) $midY -Shift
         CheckFrame 'B docked back on the right edge of this monitor' $b.Handle ($midX + 4) $waT $waR $waB
         CheckFrame 'A gave half back' $a.Handle $waL $waT ($midX - 4) $waB
+    }
+
+    if ($other -and (Want 'keys')) {
+        $otherMidX = $other.L + [int](($other.R - $other.L) / 2)
+        if (!$c2) {
+            # A window that isn't docked, on the other monitor
+            $c2 = NewWindow 'DockTestC2' ($other.L + 300) ($other.T + 300)
+            [void][W]::SetWindowPos($c2.Handle, [IntPtr]::Zero, $other.L + 300, $other.T + 300, 900, 600, 0x0004 -bor 0x0010); Start-Sleep -Milliseconds 800
+        }
 
         # Win+arrows: swap with the neighbor on that side, or go on to the monitor on that side
         $VkLeft = 0x25; $VkRight = 0x27
@@ -270,11 +300,13 @@ try {
         }
         else { "skipped the Win+arrow checks: could not focus the test window" }
     }
-    else { "skipped the two-monitor checks: one monitor only" }
+    if (!$other) { "skipped the two-monitor checks: one monitor only" }
 
+    if (Want 'close') {
     # Closing a window on the layout gives its space to the others
     [void][W]::PostMessage($a.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); Start-Sleep -Milliseconds 1500
     Check 'B took the space of closed A' ([math]::Abs((FrameRect $b.Handle).L - $waL) -le 12) $true
+    }
 }
 catch { "ABORTED: $_" }
 finally {

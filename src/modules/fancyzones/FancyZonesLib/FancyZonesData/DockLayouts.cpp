@@ -25,6 +25,10 @@ namespace JsonUtils
             result.SetNamedValue(NonLocalizable::DockLayoutsIds::AppID, json::value(node.app));
             result.SetNamedValue(NonLocalizable::DockLayoutsIds::WindowID, json::value(static_cast<double>(reinterpret_cast<intptr_t>(node.window))));
             result.SetNamedValue(NonLocalizable::DockLayoutsIds::ProcessID, json::value(static_cast<double>(node.window ? ProcessIdOf(node.window) : 0)));
+            if (!node.launch.empty())
+            {
+                result.SetNamedValue(NonLocalizable::DockLayoutsIds::LaunchID, json::value(node.launch));
+            }
         }
         else
         {
@@ -57,6 +61,7 @@ namespace JsonUtils
         else
         {
             node->app = json.GetNamedString(NonLocalizable::DockLayoutsIds::AppID).c_str();
+            node->launch = json.GetNamedString(NonLocalizable::DockLayoutsIds::LaunchID, L"").c_str();
 
             // Handle values are reused: the handle is the saved window only when it still belongs to the same process
             const double handle = json.GetNamedNumber(NonLocalizable::DockLayoutsIds::WindowID);
@@ -141,6 +146,18 @@ DockLayouts::DockLayouts()
 
         m_slots[slot] = std::move(tree);
     });
+
+    if (json::has(data.value(), NonLocalizable::DockLayoutsIds::NamedID))
+    {
+        const auto named = data->GetNamedObject(NonLocalizable::DockLayoutsIds::NamedID);
+        for (const auto& entry : named)
+        {
+            const std::wstring name{ entry.Key() };
+            JsonUtils::ReadTrees(named, name.c_str(), [&](const std::wstring& key, Dock::Tree tree) {
+                m_named[name][key] = std::move(tree);
+            });
+        }
+    }
 }
 
 DockLayouts& DockLayouts::instance()
@@ -224,11 +241,57 @@ std::optional<Dock::Tree> DockLayouts::Slot(int key) const
     return tree;
 }
 
+bool DockLayouts::HasNamed(const std::wstring& name) const noexcept
+{
+    return m_named.contains(name);
+}
+
+void DockLayouts::SaveNamed(const std::wstring& name, std::map<std::wstring, Dock::Tree> trees)
+{
+    m_named[name] = std::move(trees);
+    SaveData();
+}
+
+bool DockLayouts::DeleteNamed(const std::wstring& name)
+{
+    if (m_named.erase(name) == 0)
+    {
+        return false;
+    }
+
+    SaveData();
+    return true;
+}
+
+std::map<std::wstring, Dock::Tree> DockLayouts::Named(const std::wstring& name) const
+{
+    std::map<std::wstring, Dock::Tree> result;
+    if (const auto iter = m_named.find(name); iter != m_named.end())
+    {
+        for (const auto& [key, tree] : iter->second)
+        {
+            auto copy = tree.Clone();
+            Refresh(copy);
+            result[key] = std::move(copy);
+        }
+    }
+
+    return result;
+}
+
 void DockLayouts::SaveData() const
 {
     json::JsonObject root{};
     root.SetNamedValue(NonLocalizable::DockLayoutsIds::WorkAreasID, JsonUtils::ToJson(m_trees, [](const std::wstring& id) { return id; }));
     root.SetNamedValue(NonLocalizable::DockLayoutsIds::SlotsID, JsonUtils::ToJson(m_slots, [](int key) { return std::to_wstring(key); }));
+
+    json::JsonObject named{};
+    for (const auto& [name, trees] : m_named)
+    {
+        named.SetNamedValue(name, JsonUtils::ToJson(trees, [](const std::wstring& key) { return key; }));
+    }
+
+    root.SetNamedValue(NonLocalizable::DockLayoutsIds::NamedID, named);
 
     // Written aside and swapped in, so that a crash while writing doesn't lose the layouts
     const auto fileName = DockLayoutsFileName();

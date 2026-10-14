@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "FancyZonesLib\DockTree.h"
+#include "FancyZonesLib\FancyZonesData\DockLayouts.h"
 
 #include "Util.h"
 
@@ -297,17 +298,22 @@ namespace FancyZonesUnitTests
             CustomAssert::AreEqual(RECT{ 500, 400, 1000, 800 }, target->preview);
         }
 
-        TEST_METHOD (PreviewShowsWholeAreaWhenOnlyHiddenWindowsAreDocked)
+        TEST_METHOD (EdgeDropNextToOnlyHiddenWindowsTakesHalf)
         {
+            // a alone, as the root, and hidden (closed to the tray)
             Dock::Tree tree;
             DockAt(tree, m_a, { 10, 400 });
+            tree.Remove(nullptr);
+            tree.root = std::move(tree.root->first);
             tree.Find(m_a)->hidden = true;
 
             const auto target = tree.TargetFromPoint(m_area, { 990, 400 }, 0);
             Assert::IsTrue(target.has_value());
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, target->preview);
 
             tree.Insert(m_b, L"", target.value());
-            CustomAssert::AreEqual(RectOf(tree, m_b), target->preview);
+            CustomAssert::AreEqual(target->preview, RectOf(tree, m_b));
+            Assert::IsNull(tree.Find(m_a));
         }
 
         TEST_METHOD (HiddenWindowAloneIsNoTarget)
@@ -326,10 +332,24 @@ namespace FancyZonesUnitTests
             Assert::IsFalse(tree.TargetFromPoint(RECT{ 0, 0, 150, 800 }, { 10, 400 }, 0).has_value());
         }
 
+        TEST_METHOD (LayoutNamesThatCantBeShortcutsAreRefused)
+        {
+            Assert::IsTrue(DockCommands::IsValidName(L"DevLayout"));
+            Assert::IsTrue(DockCommands::IsValidName(L"Dev Layout 2"));
+            for (const auto name : { L"", L"a:b", L"a\\b", L"..\\x", L"%USERNAME%", L"name.", L"name ", L"con", L"a\nb" })
+            {
+                Assert::IsFalse(DockCommands::IsValidName(name), name);
+            }
+
+            Assert::IsFalse(DockCommands::IsValidName(std::wstring(101, L'a')));
+        }
+
         TEST_METHOD (CloneIsIndependent)
         {
             auto tree = SideBySide();
+            tree.Find(m_b)->launch = L"b.exe";
             auto copy = tree.Clone();
+            Assert::AreEqual(std::wstring{ L"b.exe" }, copy.Find(m_b)->launch);
 
             tree.Remove(m_b);
             CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(copy, m_b));

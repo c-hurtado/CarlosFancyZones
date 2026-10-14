@@ -18,6 +18,9 @@
 #include <FancyZonesLib/FancyZonesData/DefaultLayouts.h>
 #include <FancyZonesLib/FancyZonesData/DockLayouts.h>
 #include <common/utils/elevation.h>
+
+#include <appmodel.h>
+#include <shlwapi.h>
 #include <FancyZonesLib/FancyZonesData/LastUsedVirtualDesktop.h>
 #include <FancyZonesLib/FancyZonesData/LayoutHotkeys.h>
 #include <FancyZonesLib/FancyZonesData/LayoutTemplates.h>
@@ -64,7 +67,7 @@ constexpr const wchar_t* DisplayChangeTypeName (const DisplayChangeType type){
 // Non-localizable strings
 namespace NonLocalizable
 {
-    const wchar_t ToolWindowClassName[] = L"SuperFancyZones";
+    const auto& ToolWindowClassName = DockCommands::WindowClassName;
     const wchar_t FZEditorExecutablePath[] = L"PowerToys.FancyZonesEditor.exe";
 }
 
@@ -401,6 +404,8 @@ private:
     void DockSlot(int key, bool save) noexcept;
     void DockMoveByKey(DWORD vkCode) noexcept;
     void DockFocusByKey(DWORD vkCode) noexcept;
+    bool DockCommand(const std::wstring& verb, const std::wstring& name) noexcept;
+    void DockLoad(std::wstring name) noexcept;
     bool IsDocked(HWND window) const noexcept;
 
     HMONITOR WorkAreaKeyFromWindow(HWND window) noexcept;
@@ -415,6 +420,8 @@ private:
     RECT m_resizedWindowRect{}; // Its frame when the resize started
     bool m_dockClaimPending{}; // The claim of the slots kept for apps is about to be tried again
     DWORD m_dockSlotKey{}; // Digit of the dock layout hotkey that is held down
+    std::wstring m_dockLoadName; // Named dock layout to load on WM_PRIV_DOCK_LOAD, empty when none is pending
+    std::map<std::wstring, ULONGLONG> m_dockLaunched; // Apps started by a named layout, and when
     WorkAreaConfiguration m_workAreaConfiguration;
     DraggingState m_draggingState;
     bool m_monitorRotationPreviewActive = false;
@@ -1039,6 +1046,20 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     }
     break;
 
+    case WM_COPYDATA:
+    {
+        // A command from FanciestZones.exe started with arguments, see main.cpp
+        const auto data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+        if (!data || data->dwData != DockCommands::CopyDataId || !data->lpData || data->cbData % sizeof(wchar_t) != 0 || data->cbData > 4096)
+        {
+            return FALSE;
+        }
+
+        const std::wstring text(static_cast<const wchar_t*>(data->lpData), data->cbData / sizeof(wchar_t));
+        const auto separator = text.find(L'\n');
+        return separator != std::wstring::npos && DockCommands::IsValidName(text.substr(separator + 1)) && DockCommand(text.substr(0, separator), text.substr(separator + 1));
+    }
+
     case WM_DISPLAYCHANGE:
     {
         // Display resolution changed. Invalidate cached work-areas so they can be recreated with latest information.
@@ -1139,6 +1160,10 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             {
                 DockClaim(hwnd);
             }
+        }
+        else if (message == WM_PRIV_DOCK_LOAD)
+        {
+            DockLoad(m_dockLoadName);
         }
         else if (message == WM_PRIV_DOCK_SLOT)
         {
@@ -2027,6 +2052,190 @@ void FancyZones::DockFocusByKey(DWORD vkCode) noexcept
     if (target)
     {
         FancyZonesWindowUtils::SwitchToWindow(target);
+    }
+}
+
+namespace
+{
+    // How a named layout starts the app of a place again
+    std::wstring LaunchCommandOf(const Dock::Node& leaf)
+    {
+        if (leaf.window)
+        {
+            // A packaged app (Store, WindowsApps) is started by its id, its exe can't be run directly
+            DWORD processId = 0;
+            GetWindowThreadProcessId(leaf.window, &processId);
+            wil::unique_handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId));
+            wchar_t id[APPLICATION_USER_MODEL_ID_MAX_LENGTH]{};
+            UINT32 length = ARRAYSIZE(id);
+            if (process && GetApplicationUserModelId(process.get(), &length, id) == ERROR_SUCCESS)
+            {
+                return std::wstring{ L"shell:AppsFolder\\" } + id;
+            }
+        }
+
+        if (!leaf.launch.empty())
+        {
+            return leaf.launch;
+        }
+
+        return leaf.app.find(L"\\WindowsApps\\") == std::wstring::npos ? leaf.app : std::wstring{};
+    }
+}
+
+bool FancyZones::DockCommand(const std::wstring& verb, const std::wstring& name) noexcept
+{
+    auto& layouts = DockLayouts::instance();
+    if (FancyZonesSettings::settings().spanZonesAcrossMonitors && verb != L"delete")
+    {
+        if (const auto workArea = m_workAreaConfiguration.GetWorkAreaFromCursor())
+        {
+            workArea->ShowLayoutNameLabel(L"Layouts are off while zones span monitors");
+        }
+
+        return false;
+    }
+
+    if (verb == L"delete")
+    {
+        return layouts.DeleteNamed(name);
+    }
+
+    if (verb == L"load")
+    {
+        if (!layouts.HasNamed(name))
+        {
+            if (const auto workArea = m_workAreaConfiguration.GetWorkAreaFromCursor())
+            {
+                workArea->ShowLayoutNameLabel(L"No layout named " + name);
+            }
+
+            return false;
+        }
+
+        // Loaded from the message loop: when FancyZones was started by the command, its work areas don't exist yet.
+        // A second load before that one ran is dropped.
+        if (m_dockLoadName.empty())
+        {
+            m_dockLoadName = name;
+            PostMessageW(m_window, WM_PRIV_DOCK_LOAD, 0, 0);
+        }
+
+        return true;
+    }
+
+    if (verb != L"save")
+    {
+        return false;
+    }
+
+    std::map<std::wstring, Dock::Tree> trees;
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (workArea && workArea->DockTree().root)
+        {
+            auto tree = workArea->DockTree().Clone();
+            for (auto leaf : tree.Leaves())
+            {
+                leaf->launch = LaunchCommandOf(*leaf);
+            }
+
+            trees[workArea->UniqueId().monitorId.toString()] = std::move(tree);
+        }
+    }
+
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (workArea)
+        {
+            workArea->ShowLayoutNameLabel(trees.empty() ? L"No docked windows to save" : L"Layout " + name + L" saved");
+        }
+    }
+
+    if (trees.empty())
+    {
+        return false;
+    }
+
+    layouts.SaveNamed(name, std::move(trees));
+    return true;
+}
+
+void FancyZones::DockLoad(std::wstring name) noexcept
+{
+    m_dockLoadName.clear();
+    auto trees = DockLayouts::instance().Named(name);
+    const auto& workAreas = m_workAreaConfiguration.GetAllWorkAreas();
+    std::vector<WorkArea*> loaded;
+    for (const auto& [_, workArea] : workAreas)
+    {
+        const auto iter = workArea ? trees.find(workArea->UniqueId().monitorId.toString()) : trees.end();
+        if (iter == trees.end())
+        {
+            continue;
+        }
+
+        // A window is docked in one place only
+        for (const auto leaf : iter->second.Leaves())
+        {
+            for (const auto& [otherKey, other] : workAreas)
+            {
+                if (leaf->window && other && other != workArea)
+                {
+                    other->UndockWindow(leaf->window);
+                }
+            }
+        }
+
+        workArea->DockRecall(std::move(iter->second));
+        loaded.push_back(workArea.get());
+    }
+
+    if (loaded.empty())
+    {
+        if (const auto workArea = m_workAreaConfiguration.GetWorkAreaFromCursor())
+        {
+            workArea->ShowLayoutNameLabel(L"Layout " + name + L": none of its monitors is connected");
+        }
+
+        return;
+    }
+
+    // Open windows of the apps take their places, the apps that aren't open are started and take them as they appear
+    for (const auto& window : VirtualDesktop::instance().GetWindowsFromCurrentDesktop())
+    {
+        DockClaim(window);
+    }
+
+    // Elevated, the apps would be started elevated too, from commands anyone can write in dock-layouts.json
+    const bool launch = !is_process_elevated();
+    if (!launch)
+    {
+        Logger::warn(L"Layout {}: FanciestZones runs as administrator, apps that aren't open are not started", name);
+    }
+
+    const auto now = GetTickCount64();
+    std::erase_if(m_dockLaunched, [&](const auto& entry) { return now - entry.second > 15000; });
+    const auto recentlyLaunched = m_dockLaunched;
+    for (const auto workArea : loaded)
+    {
+        for (const auto leaf : workArea->DockTree().Leaves())
+        {
+            // Only an app id, or an exe that exists. The window of an app started a moment ago may not be there yet.
+            const bool runnable = leaf->launch.starts_with(L"shell:AppsFolder\\") ||
+                                  (leaf->launch.ends_with(L".exe") && PathIsRelativeW(leaf->launch.c_str()) == FALSE && GetFileAttributesW(leaf->launch.c_str()) != INVALID_FILE_ATTRIBUTES);
+            if (launch && !leaf->window && runnable && !recentlyLaunched.contains(leaf->launch))
+            {
+                m_dockLaunched[leaf->launch] = now;
+                const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, nullptr, leaf->launch.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                if (result <= 32)
+                {
+                    Logger::error(L"Layout {}: starting {} failed, {}", name, leaf->launch, result);
+                }
+            }
+        }
+
+        workArea->ShowLayoutNameLabel(L"Layout " + name);
     }
 }
 

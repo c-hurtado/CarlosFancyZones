@@ -23,6 +23,7 @@ extern UINT WM_PRIV_MONITOR_ROTATION_PREVIEW_SHOW; // Scheduled when the monitor
 extern UINT WM_PRIV_MONITOR_ROTATION_PREVIEW_HIDE; // Scheduled when the monitor rotation preview should be hidden
 extern UINT WM_PRIV_MONITOR_ROTATION_PREVIEW_ROTATE; // Scheduled when monitor rotation preview should rotate windows
 extern UINT WM_PRIV_DOCK_VISIBILITY; // Scheduled when a window is minimized, restored or hidden. lparam is non-zero when the window is being minimized
+extern UINT WM_PRIV_DOCK_LOAD; // Scheduled when a named dock layout is to be loaded
 extern UINT WM_PRIV_DOCK_SLOT; // Scheduled when we receive a key down press to save (wparam is non-zero) or recall a dock layout
 
 void InitializeWinhookEventIds();

@@ -22,6 +22,7 @@ namespace Dock
         // Leaf
         HWND window{}; // nullptr: an empty slot
         std::wstring app; // Process path. On an empty slot: the app the slot is kept for
+        std::wstring launch; // What starts the app (a path, or shell:AppsFolder\<id> for a packaged app). Set in named layouts.
         bool hidden{}; // Minimized or hidden window: keeps its place in the tree, but takes no space
         ULONGLONG placedAt{}; // Tick count of the first time the window was moved to its place, 0 until then
 

@@ -26,6 +26,7 @@ UINT WM_PRIV_MONITOR_ROTATION_PREVIEW_HIDE;
 UINT WM_PRIV_MONITOR_ROTATION_PREVIEW_ROTATE;
 UINT WM_PRIV_DOCK_VISIBILITY;
 UINT WM_PRIV_DOCK_SLOT;
+UINT WM_PRIV_DOCK_LOAD;
 
 std::once_flag init_flag;
 
@@ -56,5 +57,6 @@ void InitializeWinhookEventIds()
         WM_PRIV_MONITOR_ROTATION_PREVIEW_ROTATE = RegisterWindowMessage(L"{ea0e8fc6-161a-49fd-bbe4-441fd956236a}");
         WM_PRIV_DOCK_VISIBILITY = RegisterWindowMessage(L"{3c1f6f0e-7a55-4b0e-9d5b-6f1f0a8d2b41}");
         WM_PRIV_DOCK_SLOT = RegisterWindowMessage(L"{b84e2a1c-0d0f-4c57-8a36-5e2f9c7d1e63}");
+        WM_PRIV_DOCK_LOAD = RegisterWindowMessage(L"{6e0d6c52-2f4b-4c1e-9a7d-3b8e5f1a9c24}");
     });
 }

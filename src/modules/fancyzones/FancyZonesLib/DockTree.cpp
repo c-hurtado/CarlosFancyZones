@@ -135,6 +135,7 @@ namespace
         auto copy = std::make_unique<Node>();
         copy->window = node->window;
         copy->app = node->app;
+        copy->launch = node->launch;
         copy->hidden = node->hidden;
         copy->placedAt = node->placedAt;
         copy->sideBySide = node->sideBySide;
@@ -341,6 +342,13 @@ void Tree::Insert(HWND window, const std::wstring& app, const Target& target)
         target.node->hidden = false;
         target.node->placedAt = 0;
         return;
+    }
+
+    // Docked windows that are all hidden (minimized, closed to the tray) would give the window the whole work area:
+    // they leave the layout instead, and the window docks as on an empty work area. Slots kept for apps stay.
+    if (!target.node && root && !Occupies(*root) && !HasEmptySlot(*root))
+    {
+        root.reset();
     }
 
     auto owner = target.node ? OwnerOf(&root, target.node) : &root;

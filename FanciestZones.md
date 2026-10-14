@@ -34,6 +34,7 @@ Hold **Shift** while you drag a window (see `fancyzones_shiftDrag` to change tha
 - **Smallest place:** a window isn't docked where it would get less than 100 pixels in width or height.
 - **Resize:** drag a border of a docked window. The neighbors follow when you release the mouse.
 - **Minimize, restore, close:** the neighbors take the space. A restored window returns to its place.
+- **Only minimized windows docked on a monitor:** docking a new window there works as on an empty monitor (it takes half), and the minimized windows leave the layout. Restored, they float.
 
 ### Move with the keyboard
 
@@ -55,6 +56,29 @@ Shift+Win+arrows, with the same setting on, move the focus instead: from a docke
 | Win+Ctrl+Alt+digit | Recall it on the monitor under the cursor |
 
 Saving a monitor with nothing docked changes nothing: the layout already saved under that digit is kept. The keys are ignored while you drag a window.
+
+### Named layouts that start your apps
+
+A named layout covers every monitor, and loading it starts the apps that aren't open.
+
+1. Dock the windows the way you want them, on any monitors.
+2. In a terminal or the Run box (Win+R): `C:\Users\carlo\Tools\FanciestZones\x64\Debug\FanciestZones.exe save DevLayout`
+3. Load it from Command Palette or Windows search: type `DevLayout` and run it. The same works with `FanciestZones.exe load DevLayout`.
+
+| Command | What it does |
+|---|---|
+| `list` | Prints the names of the saved layouts, one per line |
+| `save <name>` | Saves the docked windows of every monitor under that name, and adds a Start menu entry with that name (in a `FanciestZones` folder) |
+| `load <name>` | Puts the layout back on the monitors it was saved on. Open windows of its apps take their places, the other apps are started and dock as their windows appear. Starts FanciestZones first if it isn't running. |
+| `delete <name>` | Removes the layout and its Start menu entry |
+| `restart` | Ends the running FanciestZones and starts it again (or just starts it). Layouts are kept. |
+
+- Saving again under the same name replaces the layout. Names ignore case.
+- The exit code is 0 on success and 1 on failure, with the reason printed. FanciestZones is a window app, so PowerShell doesn't wait for it: pipe it to see the output in order, e.g. `FanciestZones.exe list | Write-Output`.
+- If FanciestZones runs as administrator, loading doesn't start apps.
+- Store apps (Terminal, Claude, Notepad) are started by their app id, other apps by their exe. Arguments aren't kept: VS Code reopens its last folder by itself.
+- Monitors that aren't connected are skipped.
+- A name can't contain `\ / : * ? " < > |`.
 
 ### What it remembers
 
@@ -108,6 +132,7 @@ A value outside the allowed range is brought back to the nearest allowed value.
 
 | Setting | Meaning | Default |
 |---|---|---|
+| `fancyzones_systemTheme` | `true`: the drop preview takes the Windows accent color, and the two colors below are ignored | `true` |
 | `fancyzones_zoneHighlightColor` | Color of the drop preview, as `#RRGGBB` | `#008CFF` |
 | `fancyzones_highlight_opacity` | Opacity of the drop preview, 0 to 100 | 50 |
 | `fancyzones_zoneBorderColor` | Border color of the drop preview | `#FFFFFF` |
@@ -173,4 +198,4 @@ Only the C++ part of PowerToys builds with Visual Studio 2022, and that is all t
 
 The result is `x64\Debug\FanciestZones.exe`, which is what the startup shortcut on this computer runs. With `-p:Configuration=Release` the result is `x64\Release\FanciestZones.exe`, the one to copy to other computers: the debug file only runs where Visual Studio is installed.
 
-`tools\dock-live-test\docktest.ps1 -Monitor 0` (or `-Monitor 1`) checks the whole feature with real test windows. It takes over the mouse and keyboard for about a minute.
+`tools\dock-live-test\docktest.ps1 -Monitor 0` (or `-Monitor 1`) checks the whole feature with real test windows. It takes over the mouse and keyboard for about a minute. `-Only keys` (or `dock`, `resize`, `slots`, `monitors`, `close`, several separated by commas) runs only those sections, after docking two windows side by side; sections that build on earlier ones bring them along.
