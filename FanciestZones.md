@@ -45,6 +45,8 @@ Win+arrows work when `fancyzones_overrideSnapHotkeys` is on.
 | Docked, with a neighbor on that side | Swaps the two. Also moves it into an empty half. |
 | Docked, with nothing on that side | Moves it to the monitor on that side, docked on the edge it came in from |
 
+Shift+Win+arrows, with the same setting on, move the focus instead: from a docked window to the docked window on that side, on the next monitor too. Nothing moves, and nothing happens when there is no docked window on that side. On a window that isn't docked the keys keep their Windows meaning (move the window to the other monitor, stretch it vertically); on a docked window they lose it.
+
 ### Save and recall layouts
 
 | Keys | Action |

@@ -400,6 +400,8 @@ private:
     void DockVisibility(HWND window, bool minimizing) noexcept;
     void DockSlot(int key, bool save) noexcept;
     void DockMoveByKey(DWORD vkCode) noexcept;
+    void DockFocusByKey(DWORD vkCode) noexcept;
+    bool IsDocked(HWND window) const noexcept;
 
     HMONITOR WorkAreaKeyFromWindow(HWND window) noexcept;
 
@@ -821,6 +823,16 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
         }
     }
 
+    // Shift+Win+arrows move the focus from a docked window to the docked window on that side
+    if (win && shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
+    {
+        if ((info->vkCode == VK_LEFT || info->vkCode == VK_RIGHT || info->vkCode == VK_UP || info->vkCode == VK_DOWN) && IsDocked(GetForegroundWindow()))
+        {
+            PostMessageW(m_window, WM_PRIV_SNAP_HOTKEY, TRUE, info->vkCode);
+            return true;
+        }
+    }
+
     if (win && ctrl && alt)
     {
         const int digit = DigitFromVkCode(info->vkCode);
@@ -1041,7 +1053,14 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 
         if (message == WM_PRIV_SNAP_HOTKEY)
         {
-            DockMoveByKey(static_cast<DWORD>(lparam));
+            if (wparam)
+            {
+                DockFocusByKey(static_cast<DWORD>(lparam));
+            }
+            else
+            {
+                DockMoveByKey(static_cast<DWORD>(lparam));
+            }
         }
         else if (message == WM_PRIV_INIT)
         {
@@ -1944,6 +1963,70 @@ void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
         const auto opposite = edge == Dock::Edge::Left ? Dock::Edge::Right : edge == Dock::Edge::Right ? Dock::Edge::Left : edge == Dock::Edge::Top ? Dock::Edge::Bottom : Dock::Edge::Top;
         current->UndockWindow(window);
         next->DockAtEdge(window, opposite);
+    }
+}
+
+bool FancyZones::IsDocked(HWND window) const noexcept
+{
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (workArea && workArea->DockTree().Find(window))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void FancyZones::DockFocusByKey(DWORD vkCode) noexcept
+{
+    // The places of the docked windows, in screen coordinates. The places and not the frames of the windows:
+    // a window can be larger than its place, or maximized.
+    std::vector<std::pair<HWND, RECT>> places;
+    for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+    {
+        if (!workArea)
+        {
+            continue;
+        }
+
+        const auto& workAreaRect = workArea->GetWorkAreaRect();
+        const RECT area{ 0, 0, workAreaRect.width(), workAreaRect.height() };
+        for (auto [placedWindow, rect] : workArea->DockTree().WindowRects(area, FancyZonesSettings::settings().dockGap))
+        {
+            OffsetRect(&rect, workAreaRect.left(), workAreaRect.top());
+            places.emplace_back(placedWindow, rect);
+        }
+    }
+
+    const auto window = GetForegroundWindow();
+    const auto from = std::find_if(places.begin(), places.end(), [&](const auto& place) { return place.first == window; });
+    if (from == places.end())
+    {
+        return;
+    }
+
+    // The nearest docked window on that side, on any monitor, and of those the one sharing the longest border
+    HWND target = nullptr;
+    std::pair<LONG, LONG> best{};
+    for (const auto& [placedWindow, to] : places)
+    {
+        const RECT& rect = from->second;
+        const bool sideways = vkCode == VK_LEFT || vkCode == VK_RIGHT;
+        const LONG distance = vkCode == VK_LEFT ? rect.left - to.right : vkCode == VK_RIGHT ? to.left - rect.right : vkCode == VK_UP ? rect.top - to.bottom : to.top - rect.bottom;
+        const LONG overlap = sideways ? (std::min)(rect.bottom, to.bottom) - (std::max)(rect.top, to.top) : (std::min)(rect.right, to.right) - (std::max)(rect.left, to.left);
+        const std::pair<LONG, LONG> candidate{ distance, -overlap };
+        if (placedWindow != window && distance >= 0 && overlap > 0 && (!target || candidate < best))
+        {
+            target = placedWindow;
+            best = candidate;
+        }
+    }
+
+    if (target)
+    {
+        FancyZonesWindowUtils::SwitchToWindow(target);
     }
 }
 

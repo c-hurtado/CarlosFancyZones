@@ -235,6 +235,16 @@ try {
             Chord @(0x5B, $VkRight)
             CheckFrame 'Win+Right swapped them back' $b.Handle ($midX + 4) $waT $waR $waB
 
+            # Shift+Win+arrows: the focus goes to the docked window on that side, nothing moves
+            Chord @(0x5B, 0x10, $VkLeft)
+            Check 'Shift+Win+Left focused A' ([W]::GetForegroundWindow() -eq $a.Handle) $true
+            Chord @(0x5B, 0x10, $VkRight)
+            Check 'Shift+Win+Right focused B again' ([W]::GetForegroundWindow() -eq $b.Handle) $true
+            Chord @(0x5B, 0x10, 0x26)
+            Check 'Shift+Win+Up with nothing above kept the focus on B' ([W]::GetForegroundWindow() -eq $b.Handle) $true
+            CheckFrame 'A did not move' $a.Handle $waL $waT ($midX - 4) $waB
+            CheckFrame 'B did not move' $b.Handle ($midX + 4) $waT $waR $waB
+
             if ($otherIsRight) {
                 Chord @(0x5B, $VkRight)
                 CheckFrame 'Win+Right at the edge moved B to the monitor on the right' $b.Handle $other.L $other.T ($otherMidX - 4) $other.B
