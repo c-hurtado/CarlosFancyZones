@@ -11,6 +11,9 @@ namespace
 {
     constexpr float MinRatio = 0.1f;
 
+    // A window isn't docked where it would get less than this, in either direction
+    constexpr LONG MinTargetSize = 100;
+
     bool IsEmptySlot(const Node& node) noexcept
     {
         return node.IsLeaf() && !node.window;
@@ -21,10 +24,21 @@ namespace
         return node.IsLeaf() ? (node.window && !node.hidden) : (Occupies(*node.first) || Occupies(*node.second));
     }
 
-    // An empty slot keeps its share as long as the other side of the split is in use
-    bool TakesSpace(const Node& node, const Node& sibling) noexcept
+    bool HasEmptySlot(const Node& node) noexcept
     {
-        return Occupies(node) || (IsEmptySlot(node) && Occupies(sibling));
+        return node.IsLeaf() ? !node.window : (HasEmptySlot(*node.first) || HasEmptySlot(*node.second));
+    }
+
+    bool OnlyEmptySlots(const Node& node) noexcept
+    {
+        return node.IsLeaf() ? !node.window : (OnlyEmptySlots(*node.first) && OnlyEmptySlots(*node.second));
+    }
+
+    // Empty slots keep their share as long as the other side of the split is in use.
+    // slotsOnly: no window takes space here, the empty slots are laid out instead so that they can be filled.
+    bool TakesSpace(const Node& node, const Node& sibling, bool slotsOnly = false) noexcept
+    {
+        return slotsOnly ? HasEmptySlot(node) : (Occupies(node) || (OnlyEmptySlots(node) && Occupies(sibling)));
     }
 
     constexpr bool IsSideEdge(Edge edge) noexcept
@@ -65,7 +79,7 @@ namespace
 
     // Calls fn(node, rect, depth) for every node that gets space, parents first
     template<typename F>
-    void Visit(Node& node, const RECT& rect, int gap, F&& fn, size_t depth = 0)
+    void Visit(Node& node, const RECT& rect, int gap, F&& fn, size_t depth = 0, bool slotsOnly = false)
     {
         fn(node, rect, depth);
         if (node.IsLeaf())
@@ -73,21 +87,24 @@ namespace
             return;
         }
 
-        const bool first = TakesSpace(*node.first, *node.second);
-        const bool second = TakesSpace(*node.second, *node.first);
+        // Slots kept next to a window in use share the space they were given
+        slotsOnly = slotsOnly || !Occupies(node);
+
+        const bool first = TakesSpace(*node.first, *node.second, slotsOnly);
+        const bool second = TakesSpace(*node.second, *node.first, slotsOnly);
         if (first && second)
         {
             const auto [firstRect, secondRect] = Split(rect, node.sideBySide, node.ratio, gap);
-            Visit(*node.first, firstRect, gap, fn, depth + 1);
-            Visit(*node.second, secondRect, gap, fn, depth + 1);
+            Visit(*node.first, firstRect, gap, fn, depth + 1, slotsOnly);
+            Visit(*node.second, secondRect, gap, fn, depth + 1, slotsOnly);
         }
         else if (first)
         {
-            Visit(*node.first, rect, gap, fn, depth + 1);
+            Visit(*node.first, rect, gap, fn, depth + 1, slotsOnly);
         }
         else if (second)
         {
-            Visit(*node.second, rect, gap, fn, depth + 1);
+            Visit(*node.second, rect, gap, fn, depth + 1, slotsOnly);
         }
     }
 
@@ -166,9 +183,10 @@ namespace
             // The remaining side takes over the split
             slot = std::move(slot->first ? slot->first : slot->second);
         }
-        else if (IsEmptySlot(*slot->first) && IsEmptySlot(*slot->second))
+        else if (IsEmptySlot(*slot->first) && IsEmptySlot(*slot->second) && (slot->first->app.empty() || slot->second->app.empty()))
         {
-            slot = std::move(slot->first);
+            // Two empty slots become one. A slot kept for an app stays.
+            slot = std::move(slot->first->app.empty() ? slot->second : slot->first);
         }
 
         return true;
@@ -221,20 +239,25 @@ std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap,
         { area.bottom - pt.y, Edge::Bottom },
     } };
     const auto nearestAreaEdge = *std::min_element(areaEdges.begin(), areaEdges.end());
-    if (nearestAreaEdge.first < edgeBand)
-    {
-        return Target{ .node = nullptr, .edge = nearestAreaEdge.second, .fill = false, .preview = HalfAt(area, nearestAreaEdge.second) };
-    }
 
-    if (!root || !Occupies(*root))
-    {
-        return std::nullopt;
-    }
+    // No window takes space: the slots kept for apps are the targets
+    const bool slotsOnly = root && !Occupies(*root);
 
     std::optional<Target> target;
-    bool found = false;
-    Visit(*root, area, gap, [&](Node& node, const RECT& rect, size_t) {
+    bool found = nearestAreaEdge.first < edgeBand;
+    if (found)
+    {
+        target = Target{ .node = nullptr, .edge = nearestAreaEdge.second, .fill = false, .preview = HalfAt(area, nearestAreaEdge.second) };
+    }
+
+    const auto hitTest = [&](Node& node, const RECT& rect, size_t) {
         if (found || !node.IsLeaf())
+        {
+            return;
+        }
+
+        // The root is visited even when it is a hidden window, which takes no space
+        if (node.window && node.hidden)
         {
             return;
         }
@@ -272,7 +295,39 @@ std::optional<Target> Tree::TargetFromPoint(const RECT& area, POINT pt, int gap,
         {
             target = Target{ .node = &node, .edge = nearestEdge.second, .fill = false, .preview = HalfAt(rect, nearestEdge.second) };
         }
-    });
+    };
+
+    if (root && !found)
+    {
+        Visit(*root, area, gap, hitTest, 0, slotsOnly);
+    }
+
+    if (target && slotsOnly)
+    {
+        // The window will be the only one taking space, which can be more than the slot or half under the cursor
+        auto copy = Clone();
+        Target copyTarget = target.value();
+        if (target->node)
+        {
+            const auto leaves = Leaves();
+            copyTarget.node = copy.Leaves()[std::find(leaves.begin(), leaves.end(), target->node) - leaves.begin()];
+        }
+
+        const auto placeholder = reinterpret_cast<HWND>(static_cast<intptr_t>(-1));
+        copy.Insert(placeholder, L"", copyTarget);
+        for (const auto& [window, rect] : copy.WindowRects(area, gap))
+        {
+            if (window == placeholder)
+            {
+                target->preview = rect;
+            }
+        }
+    }
+
+    if (target && (target->preview.right - target->preview.left < MinTargetSize || target->preview.bottom - target->preview.top < MinTargetSize))
+    {
+        return std::nullopt;
+    }
 
     return target;
 }
@@ -399,7 +454,7 @@ bool Tree::Remove(HWND window)
         return false;
     }
 
-    if (root && IsEmptySlot(*root))
+    if (root && IsEmptySlot(*root) && root->app.empty())
     {
         root.reset();
     }

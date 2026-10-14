@@ -59,15 +59,7 @@ bool WindowMouseSnap::MoveSizeStart(HMONITOR monitor, bool isSnapping)
     m_currentWorkArea = iter->second.get();
 
     SwitchSnappingMode(isSnapping);
-
-    // A window that is moved leaves the dock layout, wherever it was docked
-    for (const auto& [_, workArea] : m_activeWorkAreas)
-    {
-        if (workArea)
-        {
-            workArea->UndockWindow(m_window);
-        }
-    }
+    GetWindowRect(m_window, &m_startRect);
 
     return true;
 }
@@ -75,9 +67,11 @@ bool WindowMouseSnap::MoveSizeStart(HMONITOR monitor, bool isSnapping)
 void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bool isSnapping, bool /*isSelectManyZonesState*/)
 {
     SwitchSnappingMode(isSnapping);
+    UndockIfMoved();
 
+    // No preview until the window moves: until then it is still in its layout
     auto iter = m_activeWorkAreas.find(monitor);
-    if (isSnapping && iter != m_activeWorkAreas.end())
+    if (isSnapping && m_moved && iter != m_activeWorkAreas.end())
     {
         // The drag has moved to a different monitor.
         // Change work area
@@ -100,8 +94,36 @@ void WindowMouseSnap::MoveSizeUpdate(HMONITOR monitor, POINT const& ptScreen, bo
     }
 }
 
+void WindowMouseSnap::UndockIfMoved()
+{
+    // A window that is moved leaves the dock layout, wherever it was docked.
+    // Holding the title bar without moving the window doesn't undock it.
+    RECT rect{};
+    if (m_moved || !GetWindowRect(m_window, &rect) || EqualRect(&rect, &m_startRect))
+    {
+        return;
+    }
+
+    m_moved = true;
+    for (const auto& [_, workArea] : m_activeWorkAreas)
+    {
+        if (workArea)
+        {
+            workArea->UndockWindow(m_window);
+        }
+    }
+}
+
 void WindowMouseSnap::MoveSizeEnd()
 {
+    UndockIfMoved();
+    if (!m_moved)
+    {
+        // The title bar was held and released: the window stays as it was, docked or not
+        SwitchSnappingMode(false);
+        return;
+    }
+
     // Don't dock a maximized window: this is a Chromium based tab that is merged back with an existing window
     // or the window is maximized by Windows when the cursor hits the screen top border
     bool docked = false;

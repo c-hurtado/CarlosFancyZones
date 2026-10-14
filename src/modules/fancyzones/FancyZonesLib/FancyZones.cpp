@@ -17,6 +17,7 @@
 #include <FancyZonesLib/FancyZonesData/CustomLayouts.h>
 #include <FancyZonesLib/FancyZonesData/DefaultLayouts.h>
 #include <FancyZonesLib/FancyZonesData/DockLayouts.h>
+#include <common/utils/elevation.h>
 #include <FancyZonesLib/FancyZonesData/LastUsedVirtualDesktop.h>
 #include <FancyZonesLib/FancyZonesData/LayoutHotkeys.h>
 #include <FancyZonesLib/FancyZonesData/LayoutTemplates.h>
@@ -87,6 +88,9 @@ namespace
 
     constexpr UINT_PTR MonitorRotationCommitTimerId = 0x4D525443;
     constexpr UINT MonitorRotationCommitDelayMillis = 760;
+
+    constexpr UINT_PTR DockClaimTimerId = 0x444B434C;
+    constexpr UINT DockClaimRetryMillis = 500;
 
     struct WindowRotationSnapshot
     {
@@ -407,6 +411,7 @@ private:
     std::unique_ptr<WindowMouseSnap> m_windowMouseSnapper{};
     HWND m_resizedWindow{}; // Window being resized by the user
     RECT m_resizedWindowRect{}; // Its frame when the resize started
+    bool m_dockClaimPending{}; // The claim of the slots kept for apps is about to be tried again
     DWORD m_dockSlotKey{}; // Digit of the dock layout hotkey that is held down
     WorkAreaConfiguration m_workAreaConfiguration;
     DraggingState m_draggingState;
@@ -667,6 +672,21 @@ void FancyZones::WindowCreated(HWND window) noexcept
 {
     DockVisibility(window, false);
     DockClaim(window);
+
+    // A claim fails while the shell doesn't know the new window yet (it isn't on any virtual desktop):
+    // as long as a slot is kept for an app, the windows get another try a moment later
+    if (!m_dockClaimPending && GetAncestor(window, GA_ROOT) == window)
+    {
+        for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
+        {
+            const auto leaves = workArea ? workArea->DockTree().Leaves() : std::vector<Dock::Node*>{};
+            if (std::any_of(leaves.begin(), leaves.end(), [](const Dock::Node* leaf) { return !leaf->window && !leaf->app.empty(); }))
+            {
+                m_dockClaimPending = SetTimer(m_window, DockClaimTimerId, DockClaimRetryMillis, nullptr) != 0;
+                break;
+            }
+        }
+    }
 
     // Docking replaces zones, a new window goes to the slot kept for its app instead
     const bool moveToAppLastZone = false;
@@ -1092,7 +1112,14 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         }
         else if (message == WM_PRIV_DOCK_VISIBILITY)
         {
-            DockVisibility(reinterpret_cast<HWND>(wparam), lparam != 0);
+            const auto hwnd = reinterpret_cast<HWND>(wparam);
+            DockVisibility(hwnd, lparam != 0);
+
+            // A window that was minimized when the slot kept for its app came up takes it once it is restored
+            if (lparam == 0 && !DockLayouts::IsHidden(hwnd))
+            {
+                DockClaim(hwnd);
+            }
         }
         else if (message == WM_PRIV_DOCK_SLOT)
         {
@@ -1146,6 +1173,15 @@ LRESULT FancyZones::WndProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             {
                 m_pendingMonitorRotationReverse.reset();
                 ShowMonitorRotationPreview();
+            }
+        }
+        else if (message == WM_TIMER && wparam == DockClaimTimerId)
+        {
+            KillTimer(m_window, DockClaimTimerId);
+            m_dockClaimPending = false;
+            for (const auto& desktopWindow : VirtualDesktop::instance().GetWindowsFromCurrentDesktop())
+            {
+                DockClaim(desktopWindow);
             }
         }
         else if (message == WM_TIMER && wparam == MonitorRotationCommitTimerId)
@@ -1320,64 +1356,6 @@ void FancyZones::UpdateWorkAreas(bool updateWindowPositions) noexcept
                 workAreaId.monitorId = monitor;
 
                 AddWorkArea(monitor.monitor, workAreaId, MonitorUtils::GetWorkAreaRect(monitor.monitor));
-            }
-        }
-    }
-
-    // init previously snapped windows
-    std::unordered_map<HWND, ZoneIndexSet> windowsToSnap{};
-    for (const auto& window : VirtualDesktop::instance().GetWindowsFromCurrentDesktop())
-    {
-        auto indexes = FancyZonesWindowProperties::RetrieveZoneIndexProperty(window);
-        if (indexes.size() == 0)
-        {
-            continue;
-        }
-
-        windowsToSnap.insert({ window, indexes });
-    }
-
-    if (FancyZonesSettings::settings().spanZonesAcrossMonitors) // one work area across monitors
-    {
-        const auto workArea = m_workAreaConfiguration.GetWorkArea(nullptr);
-        if (workArea)
-        {
-            for (const auto& [window, zones] : windowsToSnap)
-            {
-                workArea->Snap(window, zones, false);
-            }
-        }
-    }
-    else
-    {
-        // first, snap windows to the monitor where they're placed
-        for (auto iter = windowsToSnap.begin(); iter != windowsToSnap.end();)
-        {
-            const auto window = iter->first;
-            const auto zones = iter->second;
-            const auto monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
-            const auto workAreaForMonitor = m_workAreaConfiguration.GetWorkArea(monitor);
-            if (workAreaForMonitor && AppZoneHistory::instance().GetAppLastZoneIndexSet(window, workAreaForMonitor->UniqueId(), workAreaForMonitor->GetLayoutId()) == zones)
-            {
-                workAreaForMonitor->Snap(window, zones, false);
-                iter = windowsToSnap.erase(iter);
-            }
-            else
-            {
-                ++iter;
-            }
-        }
-
-        // snap rest of the windows to other work areas (in case they were moved after the monitor unplug)
-        for (const auto& [window, zones] : windowsToSnap)
-        {
-            for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
-            {
-                const auto savedIndexes = AppZoneHistory::instance().GetAppLastZoneIndexSet(window, workArea->UniqueId(), workArea->GetLayoutId());
-                if (savedIndexes == zones)
-                {
-                    workArea->Snap(window, zones, false);
-                }
             }
         }
     }
@@ -1649,6 +1627,7 @@ void FancyZones::SyncVirtualDesktops() noexcept
 
     AppliedLayouts::instance().SyncVirtualDesktops(current, lastUsed, guids);
     AppZoneHistory::instance().SyncVirtualDesktops(current, lastUsed, guids);
+    DockLayouts::instance().SyncVirtualDesktops(current, guids);
 }
 
 void FancyZones::UpdateHotkey(int hotkeyId, const PowerToysSettings::HotkeyObject& hotkeyObject, bool enable) noexcept
@@ -1849,6 +1828,12 @@ void FancyZones::FlashZones() noexcept
 
 void FancyZones::DockClaim(HWND window) noexcept
 {
+    // Events come for every child window and control too
+    if (GetAncestor(window, GA_ROOT) != window)
+    {
+        return;
+    }
+
     const auto& workAreas = m_workAreaConfiguration.GetAllWorkAreas();
     for (const auto& [_, workArea] : workAreas)
     {
@@ -1869,6 +1854,11 @@ void FancyZones::DockClaim(HWND window) noexcept
 
 void FancyZones::DockVisibility(HWND window, bool minimizing) noexcept
 {
+    if (GetAncestor(window, GA_ROOT) != window)
+    {
+        return;
+    }
+
     const bool hidden = minimizing || DockLayouts::IsHidden(window);
     for (const auto& [_, workArea] : m_workAreaConfiguration.GetAllWorkAreas())
     {
@@ -1882,7 +1872,13 @@ void FancyZones::DockVisibility(HWND window, bool minimizing) noexcept
 void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
 {
     const auto window = GetForegroundWindow();
-    if (!FancyZonesWindowProcessing::IsProcessableManually(window))
+    if (!FancyZonesWindowProcessing::IsProcessableManually(window) || FancyZonesSettings::settings().spanZonesAcrossMonitors)
+    {
+        return;
+    }
+
+    // A window of an elevated app can't be moved from here
+    if (!is_process_elevated() && IsProcessOfWindowElevated(window))
     {
         return;
     }
@@ -1954,13 +1950,20 @@ void FancyZones::DockMoveByKey(DWORD vkCode) noexcept
 void FancyZones::DockSlot(int key, bool save) noexcept
 {
     auto workArea = m_workAreaConfiguration.GetWorkAreaFromCursor();
-    if (!workArea)
+    if (!workArea || FancyZonesSettings::settings().spanZonesAcrossMonitors)
     {
         return;
     }
 
     if (save)
     {
+        // Nothing docked here: the layout saved under that digit is kept
+        if (!workArea->DockTree().root)
+        {
+            workArea->ShowLayoutNameLabel(L"No docked windows to save");
+            return;
+        }
+
         DockLayouts::instance().SaveSlot(key, workArea->DockTree());
         workArea->ShowLayoutNameLabel(L"Dock layout " + std::to_wstring(key) + L" saved");
         return;

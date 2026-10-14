@@ -6,6 +6,7 @@
 #include <common/logger/logger.h>
 #include <common/utils/json.h>
 #include <common/utils/process_path.h>
+#include <common/utils/winapi_error.h>
 
 namespace JsonUtils
 {
@@ -36,27 +37,37 @@ namespace JsonUtils
         return result;
     }
 
-    // Throws winrt::hresult_error on malformed data
-    std::unique_ptr<Dock::Node> NodeFromJson(const json::JsonObject& json)
+    // Throws winrt::hresult_error or std::exception on malformed data
+    std::unique_ptr<Dock::Node> NodeFromJson(const json::JsonObject& json, int depth = 0)
     {
+        // The tree is walked recursively everywhere: a layout nested deeper than any screen can show is not loaded
+        if (depth > 32)
+        {
+            throw std::invalid_argument("depth");
+        }
+
         auto node = std::make_unique<Dock::Node>();
         if (json.HasKey(NonLocalizable::DockLayoutsIds::FirstID))
         {
             node->sideBySide = json.GetNamedBoolean(NonLocalizable::DockLayoutsIds::SideBySideID);
             node->ratio = std::clamp(static_cast<float>(json.GetNamedNumber(NonLocalizable::DockLayoutsIds::RatioID)), 0.1f, 0.9f);
-            node->first = NodeFromJson(json.GetNamedObject(NonLocalizable::DockLayoutsIds::FirstID));
-            node->second = NodeFromJson(json.GetNamedObject(NonLocalizable::DockLayoutsIds::SecondID));
+            node->first = NodeFromJson(json.GetNamedObject(NonLocalizable::DockLayoutsIds::FirstID), depth + 1);
+            node->second = NodeFromJson(json.GetNamedObject(NonLocalizable::DockLayoutsIds::SecondID), depth + 1);
         }
         else
         {
             node->app = json.GetNamedString(NonLocalizable::DockLayoutsIds::AppID).c_str();
 
             // Handle values are reused: the handle is the saved window only when it still belongs to the same process
-            const auto window = reinterpret_cast<HWND>(static_cast<intptr_t>(json.GetNamedNumber(NonLocalizable::DockLayoutsIds::WindowID)));
-            const auto processId = static_cast<DWORD>(json.GetNamedNumber(NonLocalizable::DockLayoutsIds::ProcessID, 0));
-            if (processId != 0 && IsWindow(window) && ProcessIdOf(window) == processId)
+            const double handle = json.GetNamedNumber(NonLocalizable::DockLayoutsIds::WindowID);
+            const double process = json.GetNamedNumber(NonLocalizable::DockLayoutsIds::ProcessID, 0);
+            if (handle > 0 && handle <= MAXUINT32 && process > 0 && process <= MAXUINT32)
             {
-                node->window = window;
+                const auto window = reinterpret_cast<HWND>(static_cast<intptr_t>(handle));
+                if (IsWindow(window) && ProcessIdOf(window) == static_cast<DWORD>(process))
+                {
+                    node->window = window;
+                }
             }
         }
 
@@ -196,15 +207,7 @@ bool DockLayouts::HasSlot(int key) const noexcept
 
 void DockLayouts::SaveSlot(int key, const Dock::Tree& tree)
 {
-    if (tree.root)
-    {
-        m_slots[key] = tree.Clone();
-    }
-    else
-    {
-        m_slots.erase(key);
-    }
-
+    m_slots[key] = tree.Clone();
     SaveData();
 }
 
@@ -226,5 +229,43 @@ void DockLayouts::SaveData() const
     json::JsonObject root{};
     root.SetNamedValue(NonLocalizable::DockLayoutsIds::WorkAreasID, JsonUtils::ToJson(m_trees, [](const std::wstring& id) { return id; }));
     root.SetNamedValue(NonLocalizable::DockLayoutsIds::SlotsID, JsonUtils::ToJson(m_slots, [](int key) { return std::to_wstring(key); }));
-    json::to_file(DockLayoutsFileName(), root);
+
+    // Written aside and swapped in, so that a crash while writing doesn't lose the layouts
+    const auto fileName = DockLayoutsFileName();
+    const auto tempFileName = fileName + L".tmp";
+    DeleteFileW(tempFileName.c_str());
+    json::to_file(tempFileName, root);
+
+    // to_file doesn't report a failed write: only a file that reads back replaces the good one
+    if (!json::from_file(tempFileName) || !MoveFileExW(tempFileName.c_str(), fileName.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+        Logger::error(L"Saving dock-layouts failed: {}", get_last_error_or_default(GetLastError()));
+        DeleteFileW(tempFileName.c_str());
+    }
+}
+
+void DockLayouts::SyncVirtualDesktops(const GUID& currentVirtualDesktop, const std::optional<std::vector<GUID>>& desktops)
+{
+    // Without the list of desktops there is no telling which ones are gone
+    if (!desktops || desktops->empty())
+    {
+        return;
+    }
+
+    // Keys end with the id of the virtual desktop, see WorkAreaId::toString
+    const auto isOnDesktop = [](const std::wstring& key, const GUID& desktop) {
+        wchar_t id[39]{};
+        return StringFromGUID2(desktop, id, ARRAYSIZE(id)) != 0 && key.ends_with(id);
+    };
+
+    const auto erased = std::erase_if(m_trees, [&](const auto& entry) {
+        return !isOnDesktop(entry.first, currentVirtualDesktop) && !isOnDesktop(entry.first, GUID_NULL) &&
+               std::none_of(desktops->begin(), desktops->end(), [&](const GUID& desktop) { return isOnDesktop(entry.first, desktop); });
+    });
+
+    if (erased != 0)
+    {
+        Logger::info(L"Dropped {} dock layouts of virtual desktops that are gone", erased);
+        SaveData();
+    }
 }

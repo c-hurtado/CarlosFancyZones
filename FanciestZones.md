@@ -1,6 +1,6 @@
 # FanciestZones reference
 
-FanciestZones is a personal fork of PowerToys FancyZones. It docks windows by drag instead of snapping them to zones drawn in advance, in the style of TrellisWM on macOS. This page covers how to run it, use it and configure it.
+FanciestZones is a personal fork of PowerToys FancyZones. It docks windows by drag instead of snapping them to zones drawn in advance, in the style of TrellisWM on macOS. This page covers how to run it, use it, configure it and install it on another computer.
 
 ## Run it
 
@@ -30,7 +30,8 @@ Hold **Shift** while you drag a window (see `fancyzones_shiftDrag` to change tha
 | On an empty half | It fills it |
 | In the middle of a docked window | Nothing: the window floats |
 
-- **Undock:** drag the window without Shift. Its neighbors take the space.
+- **Undock:** drag the window without Shift. Its neighbors take the space. Holding the title bar without moving the window leaves it docked.
+- **Smallest place:** a window isn't docked where it would get less than 100 pixels in width or height.
 - **Resize:** drag a border of a docked window. The neighbors follow when you release the mouse.
 - **Minimize, restore, close:** the neighbors take the space. A restored window returns to its place.
 
@@ -51,11 +52,11 @@ Win+arrows work when `fancyzones_overrideSnapHotkeys` is on.
 | Win+Ctrl+Alt+Shift+digit | Save the layout of the monitor under the cursor to that digit |
 | Win+Ctrl+Alt+digit | Recall it on the monitor under the cursor |
 
-Saving an empty monitor clears that digit. The keys are ignored while you drag a window.
+Saving a monitor with nothing docked changes nothing: the layout already saved under that digit is kept. The keys are ignored while you drag a window.
 
 ### What it remembers
 
-Layouts are kept per monitor and per virtual desktop in `dock-layouts.json`, and they survive a restart. When a docked window is gone at startup, its place is kept for that app, and the next window of the app takes it. After a reboot, apps return to their places as you open them.
+Layouts are kept per monitor and per virtual desktop in `dock-layouts.json`, and they survive a restart. When a docked window is gone at startup, its place is kept for that app, and the next window of the app takes it. After a reboot, apps return to their places as you open them. A kept place can also be filled by hand: Shift-drag any window onto it. Layouts of virtual desktops that were deleted are dropped.
 
 To forget all layouts and saved digits, stop the fork, delete `%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones\dock-layouts.json`, and start the fork again.
 
@@ -130,6 +131,33 @@ A copy of the file from before the docking settings were added is next to it: `s
 - A window that crosses between monitors of different scaling can land about 4 pixels off until the layout changes again.
 - Layouts are stored per monitor. When a monitor is turned off or its identity changes, the windows docked on it stay where they are but are no longer in a layout. Dock them again.
 - The hotkeys for saved layouts are fixed in code.
+- Windows of apps that run as administrator can't be docked unless the fork runs as administrator too.
+- Docking is off when "span zones across monitors" is on.
+
+## Install it on another computer
+
+The release build is one file, `FanciestZones.exe`. It needs Windows 10 or 11 (64-bit) and nothing else: no PowerToys, no Visual Studio, no runtime to install.
+
+1. On this computer, build the release version (see "Rebuild it", with `-p:Configuration=Release`). The file is `C:\Users\carlo\Tools\FanciestZones\x64\Release\FanciestZones.exe`.
+2. Copy that file to the other computer, for example to `%LOCALAPPDATA%\FanciestZones\`.
+3. If PowerToys is installed there, turn FancyZones off in it.
+4. Make it start at sign-in, and start it now. In PowerShell:
+
+   ```powershell
+   $exe = "$env:LOCALAPPDATA\FanciestZones\FanciestZones.exe"
+   $link = (New-Object -ComObject WScript.Shell).CreateShortcut("$([Environment]::GetFolderPath('Startup'))\FanciestZones.lnk")
+   $link.TargetPath = $exe; $link.Save()
+   Start-Process $exe
+   ```
+
+5. Optional: copy your `settings.json` to `%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones\` on the other computer (create the folder if it isn't there). Without it the defaults apply: docking needs Shift, and Win+arrows are left to Windows. Don't copy `dock-layouts.json`: layouts belong to the monitors of one computer.
+
+Things to expect:
+
+- The file isn't signed. If you download it instead of copying it from a drive, Windows SmartScreen may ask before the first run: choose "More info", then "Run anyway".
+- To update, end `FanciestZones.exe`, replace the file, and start it again.
+
+This was checked on this computer only: the release file, copied alone into an empty folder, passed the whole live test. It was not tried on a computer without PowerToys.
 
 ## Rebuild it
 
@@ -140,5 +168,7 @@ Only the C++ part of PowerToys builds with Visual Studio 2022, and that is all t
   C:\Users\carlo\Tools\FanciestZones\src\modules\fancyzones\FancyZones\FancyZones.vcxproj `
   -p:Platform=x64 -p:Configuration=Debug "-p:SolutionDir=C:\Users\carlo\Tools\FanciestZones\\" -m
 ```
+
+The result is `x64\Debug\FanciestZones.exe`, which is what the startup shortcut on this computer runs. With `-p:Configuration=Release` the result is `x64\Release\FanciestZones.exe`, the one to copy to other computers: the debug file only runs where Visual Studio is installed.
 
 `tools\dock-live-test\docktest.ps1 -Monitor 0` (or `-Monitor 1`) checks the whole feature with real test windows. It takes over the mouse and keyboard for about a minute.

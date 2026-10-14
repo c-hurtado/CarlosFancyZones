@@ -2,6 +2,7 @@
 #include "WorkArea.h"
 
 #include <common/logger/logger.h>
+#include <common/utils/elevation.h>
 #include <common/utils/process_path.h>
 
 #include "FancyZonesData/AppliedLayouts.h"
@@ -286,6 +287,13 @@ namespace
     std::optional<Dock::Target> DockTarget(Dock::Tree& tree, const RECT& area, POINT pt)
     {
         const auto& settings = FancyZonesSettings::settings();
+
+        // ponytail: no docking when one work area spans all monitors, halves would straddle the bezels. Dock per monitor inside the span if that mode is ever wanted.
+        if (settings.spanZonesAcrossMonitors)
+        {
+            return std::nullopt;
+        }
+
         return tree.TargetFromPoint(area, pt, settings.dockGap, settings.dockEdgeBand, settings.dockWindowEdgePercent / 100.0f);
     }
     // SizeWindowToRect moves windows asynchronously: a window isn't where it was sent right away
@@ -329,7 +337,7 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
 bool WorkArea::DockWindow(HWND window, POINT pt)
 {
     auto& tree = DockTree();
-    tree.Remove(window);
+    const bool removed = tree.Remove(window);
 
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
     const auto target = DockTarget(tree, area, pt);
@@ -338,8 +346,12 @@ bool WorkArea::DockWindow(HWND window, POINT pt)
         tree.Insert(window, get_process_path(window), target.value());
     }
 
-    ApplyDockLayout();
-    DockLayouts::instance().SaveData();
+    if (removed || target)
+    {
+        ApplyDockLayout();
+        DockLayouts::instance().SaveData();
+    }
+
     return target.has_value();
 }
 
@@ -429,7 +441,8 @@ bool WorkArea::DockClaim(HWND window)
 
         if (app.empty())
         {
-            if (!FancyZonesWindowProcessing::IsProcessableAutomatically(window))
+            // A window of an elevated app can't be moved from here
+            if (!FancyZonesWindowProcessing::IsProcessableAutomatically(window) || (!is_process_elevated() && IsProcessOfWindowElevated(window)))
             {
                 return false;
             }
@@ -501,8 +514,8 @@ void WorkArea::ApplyDockLayout()
             leaf->placedAt = now;
         }
 
-        // Moving a maximized window would restore it
-        if (FancyZonesWindowUtils::IsWindowMaximized(window))
+        // Moving a maximized window would restore it. A place squeezed to nothing by the gaps is no place.
+        if (FancyZonesWindowUtils::IsWindowMaximized(window) || rect.right <= rect.left || rect.bottom <= rect.top)
         {
             continue;
         }

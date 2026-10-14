@@ -21,6 +21,7 @@ public:
 
 private:
     void SwitchSnappingMode(bool isSnapping);
+    void UndockIfMoved();
 
     void SetWindowTransparency();
     void ResetWindowTransparency();
@@ -44,4 +45,7 @@ private:
     WorkArea* m_currentWorkArea; // "Active" WorkArea, where the move/size is happening. Will update as drag moves between monitors.
     
     bool m_snappingMode{ false };
+
+    RECT m_startRect{}; // Where the window was when the move started
+    bool m_moved{ false }; // Moved since then, and so taken out of its dock layout
 };

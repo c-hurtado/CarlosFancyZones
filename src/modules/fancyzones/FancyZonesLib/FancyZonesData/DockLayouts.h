@@ -46,6 +46,8 @@ public:
     Dock::Tree& Tree(const FancyZonesDataTypes::WorkAreaId& id);
     // Removes the window from the layouts of all work areas, the ones of other virtual desktops included
     bool RemoveWindow(HWND window);
+    // Drops the layouts of virtual desktops that don't exist anymore
+    void SyncVirtualDesktops(const GUID& currentVirtualDesktop, const std::optional<std::vector<GUID>>& desktops);
 
     bool HasSlot(int key) const noexcept;
     void SaveSlot(int key, const Dock::Tree& tree);

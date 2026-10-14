@@ -236,6 +236,96 @@ namespace FancyZonesUnitTests
             CustomAssert::AreEqual(RECT{ 505, 0, 1000, 800 }, RectOf(tree, m_b, 10));
         }
 
+        // The window is gone, its place is kept for its app
+        void KeepSlot(Dock::Tree& tree, HWND window, const wchar_t* app)
+        {
+            auto leaf = tree.Find(window);
+            leaf->window = nullptr;
+            leaf->app = app;
+        }
+
+        TEST_METHOD (KeptSlotSurvivesRemovingTheLastWindow)
+        {
+            auto tree = SideBySide();
+            KeepSlot(tree, m_b, L"b.exe");
+
+            Assert::IsTrue(tree.Remove(m_a));
+            Assert::IsTrue(tree.root != nullptr);
+            Assert::AreEqual(std::wstring{ L"b.exe" }, tree.root->app);
+        }
+
+        TEST_METHOD (KeptSlotsAreNotMerged)
+        {
+            // a on the left, b above c on the right
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 750, 700 });
+            KeepSlot(tree, m_a, L"a.exe");
+            KeepSlot(tree, m_b, L"b.exe");
+
+            Assert::IsTrue(tree.Remove(m_c));
+            Assert::AreEqual(size_t{ 2 }, tree.Leaves().size());
+        }
+
+        TEST_METHOD (KeptSlotsCanBeFilledWhenNoWindowTakesSpace)
+        {
+            auto tree = SideBySide();
+            KeepSlot(tree, m_a, L"a.exe");
+            KeepSlot(tree, m_b, L"b.exe");
+
+            const auto target = tree.TargetFromPoint(m_area, { 750, 400 }, 0);
+            Assert::IsTrue(target.has_value());
+            Assert::IsTrue(target->fill);
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, target->preview);
+
+            tree.Insert(m_c, L"c.exe", target.value());
+            CustomAssert::AreEqual(RECT{ 500, 0, 1000, 800 }, RectOf(tree, m_c));
+        }
+
+        TEST_METHOD (KeptSlotsNextToWindowShareTheirSpace)
+        {
+            // a on the left, slots for b above c on the right
+            auto tree = SideBySide();
+            DockAt(tree, m_c, { 750, 700 });
+            KeepSlot(tree, m_b, L"b.exe");
+            KeepSlot(tree, m_c, L"c.exe");
+
+            CustomAssert::AreEqual(RECT{ 0, 0, 500, 800 }, RectOf(tree, m_a));
+
+            const auto target = tree.TargetFromPoint(m_area, { 750, 600 }, 0);
+            Assert::IsTrue(target.has_value());
+            Assert::IsTrue(target->fill);
+            CustomAssert::AreEqual(RECT{ 500, 400, 1000, 800 }, target->preview);
+        }
+
+        TEST_METHOD (PreviewShowsWholeAreaWhenOnlyHiddenWindowsAreDocked)
+        {
+            Dock::Tree tree;
+            DockAt(tree, m_a, { 10, 400 });
+            tree.Find(m_a)->hidden = true;
+
+            const auto target = tree.TargetFromPoint(m_area, { 990, 400 }, 0);
+            Assert::IsTrue(target.has_value());
+
+            tree.Insert(m_b, L"", target.value());
+            CustomAssert::AreEqual(RectOf(tree, m_b), target->preview);
+        }
+
+        TEST_METHOD (HiddenWindowAloneIsNoTarget)
+        {
+            auto tree = SideBySide();
+            tree.Remove(m_a);
+            tree.Find(m_b)->hidden = true;
+
+            // 20% into the work area: inside the share of a window, outside the band of the work area
+            Assert::IsFalse(tree.TargetFromPoint(m_area, { 200, 400 }, 0).has_value());
+        }
+
+        TEST_METHOD (NoTargetWhereWindowWouldBeTooSmall)
+        {
+            Dock::Tree tree;
+            Assert::IsFalse(tree.TargetFromPoint(RECT{ 0, 0, 150, 800 }, { 10, 400 }, 0).has_value());
+        }
+
         TEST_METHOD (CloneIsIndependent)
         {
             auto tree = SideBySide();
