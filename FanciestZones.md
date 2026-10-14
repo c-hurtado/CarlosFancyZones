@@ -1,14 +1,14 @@
-# CarlosFancyZones reference
+# FanciestZones reference
 
-CarlosFancyZones is a personal fork of PowerToys FancyZones. It docks windows by drag instead of snapping them to zones drawn in advance, in the style of TrellisWM on macOS. This page covers how to run it, use it and configure it.
+FanciestZones is a personal fork of PowerToys FancyZones. It docks windows by drag instead of snapping them to zones drawn in advance, in the style of TrellisWM on macOS. This page covers how to run it, use it and configure it.
 
 ## Run it
 
 | What | Where |
 |---|---|
-| Executable | `C:\Users\carlo\Tools\TrellisWin\x64\Debug\CarlosFancyZones.exe` |
-| Starts at sign-in through | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\CarlosFancyZones.lnk` |
-| Stop it | End `CarlosFancyZones.exe` in Task Manager |
+| Executable | `C:\Users\carlo\Tools\FanciestZones\x64\Debug\FanciestZones.exe` |
+| Starts at sign-in through | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FanciestZones.lnk` |
+| Stop it | End `FanciestZones.exe` in Task Manager |
 | Start it again | Run the shortcut or the executable |
 | Logs | `%LOCALAPPDATA%\Microsoft\PowerToys\FancyZones\Logs` |
 
@@ -137,8 +137,8 @@ Only the C++ part of PowerToys builds with Visual Studio 2022, and that is all t
 
 ```powershell
 & "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\amd64\MSBuild.exe" `
-  C:\Users\carlo\Tools\TrellisWin\src\modules\fancyzones\FancyZones\FancyZones.vcxproj `
-  -p:Platform=x64 -p:Configuration=Debug "-p:SolutionDir=C:\Users\carlo\Tools\TrellisWin\\" -m
+  C:\Users\carlo\Tools\FanciestZones\src\modules\fancyzones\FancyZones\FancyZones.vcxproj `
+  -p:Platform=x64 -p:Configuration=Debug "-p:SolutionDir=C:\Users\carlo\Tools\FanciestZones\\" -m
 ```
 
 `tools\dock-live-test\docktest.ps1 -Monitor 0` (or `-Monitor 1`) checks the whole feature with real test windows. It takes over the mouse and keyboard for about a minute.

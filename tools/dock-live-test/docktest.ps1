@@ -1,5 +1,5 @@
 # Live check of the dock fork: drives real test windows with synthetic mouse and keyboard input.
-param([string]$Exe = "$PSScriptRoot\..\..\x64\Debug\CarlosFancyZones.exe", [switch]$NoInput,
+param([string]$Exe = "$PSScriptRoot\..\..\x64\Debug\FanciestZones.exe", [switch]$NoInput,
     # 0: the primary monitor, 1: the other one
     [int]$Monitor = 0)
 
