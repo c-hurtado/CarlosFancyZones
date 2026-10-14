@@ -254,51 +254,51 @@ try {
             [void][W]::SetWindowPos($c2.Handle, [IntPtr]::Zero, $other.L + 300, $other.T + 300, 900, 600, 0x0004 -bor 0x0010); Start-Sleep -Milliseconds 800
         }
 
-        # Win+arrows: swap with the neighbor on that side, or go on to the monitor on that side
+        # Shift+Win+arrows: swap with the neighbor on that side, or go on to the monitor on that side
         $VkLeft = 0x25; $VkRight = 0x27
         $otherIsRight = $other.L -ge $waR
         [W]::Raise($b.Handle); Start-Sleep -Milliseconds 600
         if ([W]::GetForegroundWindow() -eq $b.Handle) {
-            Chord @(0x5B, $VkLeft)
-            CheckFrame 'Win+Left swapped B with A' $b.Handle $waL $waT ($midX - 4) $waB
-            CheckFrame 'A is on the right now' $a.Handle ($midX + 4) $waT $waR $waB
-            Chord @(0x5B, $VkRight)
-            CheckFrame 'Win+Right swapped them back' $b.Handle ($midX + 4) $waT $waR $waB
-
-            # Shift+Win+arrows: the focus goes to the docked window on that side, nothing moves
             Chord @(0x5B, 0x10, $VkLeft)
-            Check 'Shift+Win+Left focused A' ([W]::GetForegroundWindow() -eq $a.Handle) $true
+            CheckFrame 'Shift+Win+Left swapped B with A' $b.Handle $waL $waT ($midX - 4) $waB
+            CheckFrame 'A is on the right now' $a.Handle ($midX + 4) $waT $waR $waB
             Chord @(0x5B, 0x10, $VkRight)
-            Check 'Shift+Win+Right focused B again' ([W]::GetForegroundWindow() -eq $b.Handle) $true
-            Chord @(0x5B, 0x10, 0x26)
-            Check 'Shift+Win+Up with nothing above kept the focus on B' ([W]::GetForegroundWindow() -eq $b.Handle) $true
+            CheckFrame 'Shift+Win+Right swapped them back' $b.Handle ($midX + 4) $waT $waR $waB
+
+            # Win+arrows: the focus goes to the docked window on that side, nothing moves
+            Chord @(0x5B, $VkLeft)
+            Check 'Win+Left focused A' ([W]::GetForegroundWindow() -eq $a.Handle) $true
+            Chord @(0x5B, $VkRight)
+            Check 'Win+Right focused B again' ([W]::GetForegroundWindow() -eq $b.Handle) $true
+            Chord @(0x5B, 0x26)
+            Check 'Win+Up with nothing above kept the focus on B' ([W]::GetForegroundWindow() -eq $b.Handle) $true
             CheckFrame 'A did not move' $a.Handle $waL $waT ($midX - 4) $waB
             CheckFrame 'B did not move' $b.Handle ($midX + 4) $waT $waR $waB
 
             if ($otherIsRight) {
-                Chord @(0x5B, $VkRight)
-                CheckFrame 'Win+Right at the edge moved B to the monitor on the right' $b.Handle $other.L $other.T ($otherMidX - 4) $other.B
+                Chord @(0x5B, 0x10, $VkRight)
+                CheckFrame 'Shift+Win+Right at the edge moved B to the monitor on the right' $b.Handle $other.L $other.T ($otherMidX - 4) $other.B
                 CheckFrame 'A took the whole monitor' $a.Handle $waL $waT $waR $waB
-                Chord @(0x5B, $VkLeft)
-                CheckFrame 'Win+Left brought B back, on the right edge' $b.Handle ($midX + 4) $waT $waR $waB
+                Chord @(0x5B, 0x10, $VkLeft)
+                CheckFrame 'Shift+Win+Left brought B back, on the right edge' $b.Handle ($midX + 4) $waT $waR $waB
             }
             else {
-                Chord @(0x5B, $VkLeft); Chord @(0x5B, $VkLeft)
-                CheckFrame 'Win+Left at the edge moved B to the monitor on the left' $b.Handle ($otherMidX + 4) $other.T $other.R $other.B
+                Chord @(0x5B, 0x10, $VkLeft); Chord @(0x5B, 0x10, $VkLeft)
+                CheckFrame 'Shift+Win+Left at the edge moved B to the monitor on the left' $b.Handle ($otherMidX + 4) $other.T $other.R $other.B
                 CheckFrame 'A took the whole monitor' $a.Handle $waL $waT $waR $waB
-                Chord @(0x5B, $VkRight)
-                CheckFrame 'Win+Right brought B back, on the left edge' $b.Handle $waL $waT ($midX - 4) $waB
+                Chord @(0x5B, 0x10, $VkRight)
+                CheckFrame 'Shift+Win+Right brought B back, on the left edge' $b.Handle $waL $waT ($midX - 4) $waB
             }
 
             # A window that isn't docked gets docked on that side
             [W]::Raise($c2.Handle); Start-Sleep -Milliseconds 600
             if ([W]::GetForegroundWindow() -eq $c2.Handle) {
-                Chord @(0x5B, $VkLeft)
-                CheckFrame 'Win+Left docked a floating window on the left of its monitor' $c2.Handle $other.L $other.T ($otherMidX - 4) $other.B
+                Chord @(0x5B, 0x10, $VkLeft)
+                CheckFrame 'Shift+Win+Left docked a floating window on the left of its monitor' $c2.Handle $other.L $other.T ($otherMidX - 4) $other.B
                 [void][W]::PostMessage($c2.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero); Start-Sleep -Milliseconds 1000
             }
         }
-        else { "skipped the Win+arrow checks: could not focus the test window" }
+        else { "skipped the keyboard checks: could not focus the test window" }
     }
     if (!$other) { "skipped the two-monitor checks: one monitor only" }
 

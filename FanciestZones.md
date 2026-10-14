@@ -38,15 +38,19 @@ Hold **Shift** while you drag a window (see `fancyzones_shiftDrag` to change tha
 
 ### Move with the keyboard
 
-Win+arrows work when `fancyzones_overrideSnapHotkeys` is on.
+Both shortcuts below work when `fancyzones_overrideSnapHotkeys` is on.
 
-| Window | Win+arrow does |
+Win+arrows move the focus: from a docked window to the docked window on that side, on the next monitor too. Nothing moves, and nothing happens when there is no docked window on that side. On a window that isn't docked the keys keep their Windows meaning (snap, maximize, minimize); on a docked window they lose it.
+
+Shift+Win+arrows move the window:
+
+| Window | Shift+Win+arrow does |
 |---|---|
 | Floating | Docks it on that side of its monitor |
 | Docked, with a neighbor on that side | Swaps the two. Also moves it into an empty half. |
 | Docked, with nothing on that side | Moves it to the monitor on that side, docked on the edge it came in from |
 
-Shift+Win+arrows, with the same setting on, move the focus instead: from a docked window to the docked window on that side, on the next monitor too. Nothing moves, and nothing happens when there is no docked window on that side. On a window that isn't docked the keys keep their Windows meaning (move the window to the other monitor, stretch it vertically); on a docked window they lose it.
+They replace the Windows meaning of Shift+Win+arrows (move to the other monitor, stretch vertically) on ordinary app windows. On a window that can't be docked (one that runs as administrator, or any window while "span zones across monitors" is on), the keys then do nothing.
 
 ### Save and recall layouts
 
@@ -123,7 +127,7 @@ A value outside the allowed range is brought back to the nearest allowed value.
 |---|---|---|
 | `fancyzones_shiftDrag` | `true`: dock only while Shift is held. `false`: dock on every drag, and Shift turns docking off. | `true` |
 | `fancyzones_mouseSwitch` | A right click during a drag toggles docking | `false` |
-| `fancyzones_overrideSnapHotkeys` | Win+arrows move windows in the layout | `false` |
+| `fancyzones_overrideSnapHotkeys` | Win+arrows move the focus between docked windows, Shift+Win+arrows move windows in the layout | `false` |
 | `fancyzones_excluded_apps` | Apps that are never docked: one name or path fragment per line (`\r` or `\n` between entries in the JSON string) | empty |
 | `fancyzones_allowChildWindowSnap` | Also dock windows that have an owner window, such as dialogs | `false` |
 | `fancyzones_restoreSize` | A window that is undocked gets back the size it had before | `false` |

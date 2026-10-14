@@ -817,8 +817,8 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
         PostMessageW(m_window, WM_PRIV_MONITOR_ROTATION_PREVIEW_HIDE, 0, 0);
     }
 
-    // Win+arrows move the foreground window in the dock layout
-    if (win && !shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
+    // Shift+Win+arrows move the foreground window in the dock layout
+    if (win && shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
     {
         if (info->vkCode == VK_LEFT || info->vkCode == VK_RIGHT || info->vkCode == VK_UP || info->vkCode == VK_DOWN)
         {
@@ -830,8 +830,8 @@ FancyZones::OnKeyDown(PKBDLLHOOKSTRUCT info) noexcept
         }
     }
 
-    // Shift+Win+arrows move the focus from a docked window to the docked window on that side
-    if (win && shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
+    // Win+arrows move the focus from a docked window to the docked window on that side
+    if (win && !shift && !ctrl && !alt && FancyZonesSettings::settings().overrideSnapHotkeys)
     {
         if ((info->vkCode == VK_LEFT || info->vkCode == VK_RIGHT || info->vkCode == VK_UP || info->vkCode == VK_DOWN) && IsDocked(GetForegroundWindow()))
         {
