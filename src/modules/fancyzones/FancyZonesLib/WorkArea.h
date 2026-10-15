@@ -3,6 +3,7 @@
 #include <optional>
 #include <vector>
 
+#include <FancyZonesLib/Colors.h>
 #include <FancyZonesLib/DockTree.h>
 #include <FancyZonesLib/Layout.h>
 #include <FancyZonesLib/LayoutAssignedWindows.h>
@@ -97,4 +98,5 @@ private:
     LayoutAssignedWindows m_layoutWindows{};
     std::unique_ptr<ZonesOverlay> m_zonesOverlay;
     std::optional<RECT> m_dockPreview; // Dock target currently drawn on the overlay
+    std::optional<Colors::ZoneColors> m_dockColors; // Colors of the drag in progress, read once
 };

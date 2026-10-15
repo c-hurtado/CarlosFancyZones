@@ -17,6 +17,23 @@
 
 class ZonesOverlay
 {
+public:
+    // Glow along a work area edge that the cursor is heading for
+    struct EdgeGuide
+    {
+        enum class Side
+        {
+            Left,
+            Top,
+            Right,
+            Bottom
+        } side;
+        float intensity; // 0..1, 1 when the cursor is inside the dock band
+        float depth; // Pixels the glow reaches into the work area
+        COLORREF color;
+    };
+
+private:
     struct DrawableRect
     {
         D2D1_RECT_F rect;
@@ -25,6 +42,7 @@ class ZonesOverlay
         D2D1_COLOR_F textColor;
         ZoneIndex id;
         bool showText;
+        bool styled = false; // Rounded, gradient and glowing instead of a flat rectangle
     };
 
     struct AnimationInfo
@@ -74,6 +92,7 @@ class ZonesOverlay
     bool m_animateRotation = false;
     std::optional<size_t> m_monitorNumber;
     std::optional<std::chrono::steady_clock::time_point> m_rotationPulseStart;
+    std::optional<EdgeGuide> m_edgeGuide;
 
     float GetAnimationAlpha();
     float GetLayoutNameLabelAlpha();
@@ -105,10 +124,12 @@ public:
     void Hide();
     void Show();
     void Flash();
+    void SetEdgeGuide(std::optional<EdgeGuide> guide);
     void DrawActiveZoneSet(const ZonesMap& zones,
                            const ZoneIndexSet& highlightZones,
                            const Colors::ZoneColors& colors,
-                           const bool showZoneText);
+                           const bool showZoneText,
+                           const bool styled = false);
     void ShowLayoutName(const std::wstring& text, const LayoutNameLabelOptions& options);
     void DrawMonitorRotationPreview(const std::vector<RECT>& windowRects, size_t monitorNumber, std::optional<bool> reverse, bool animateRotation);
 };

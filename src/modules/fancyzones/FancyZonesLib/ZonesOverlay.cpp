@@ -49,6 +49,145 @@ namespace
         return value * value * (3.f - 2.f * value);
     }
 
+    // Rotates the hue of a color, to pair an accent with a neighbor for gradients
+    D2D1_COLOR_F ShiftHue(D2D1_COLOR_F color, float degrees, float valueScale) noexcept
+    {
+        const float maxC = (std::max)({ color.r, color.g, color.b });
+        const float minC = (std::min)({ color.r, color.g, color.b });
+        const float delta = maxC - minC;
+        float hue = 0.f;
+        if (delta > 0.0001f)
+        {
+            if (maxC == color.r)
+            {
+                hue = std::fmod((color.g - color.b) / delta + 6.f, 6.f);
+            }
+            else if (maxC == color.g)
+            {
+                hue = (color.b - color.r) / delta + 2.f;
+            }
+            else
+            {
+                hue = (color.r - color.g) / delta + 4.f;
+            }
+            hue *= 60.f;
+        }
+        const float sat = maxC <= 0.f ? 0.f : delta / maxC;
+        hue = std::fmod(hue + degrees + 720.f, 360.f);
+        const float value = (std::min)(1.f, maxC * valueScale);
+        const float chroma = value * sat;
+        const float x = chroma * (1.f - std::fabs(std::fmod(hue / 60.f, 2.f) - 1.f));
+        const float m = value - chroma;
+        float r = 0.f, g = 0.f, b = 0.f;
+        switch (static_cast<int>(hue / 60.f) % 6)
+        {
+        case 0: r = chroma; g = x; break;
+        case 1: r = x; g = chroma; break;
+        case 2: g = chroma; b = x; break;
+        case 3: g = x; b = chroma; break;
+        case 4: r = x; b = chroma; break;
+        default: r = chroma; b = x; break;
+        }
+        return D2D1::ColorF(r + m, g + m, b + m, color.a);
+    }
+
+    constexpr float ZoneCornerRadius = 8.f; // Matches Windows 11 window corners
+
+    // Gradient fill with a thin highlight on the top edge
+    void DrawStyledRect(ID2D1RenderTarget* target, const D2D1_RECT_F& rect, D2D1_COLOR_F fill, D2D1_COLOR_F border, float pulse) noexcept
+    {
+        // pulse 0..1 breathes the fill very slightly
+        fill.a *= 0.92f + 0.16f * pulse;
+        const auto rounded = D2D1::RoundedRect(rect, ZoneCornerRadius, ZoneCornerRadius);
+        const auto partner = ShiftHue(fill, 40.f, 0.85f);
+
+        ID2D1GradientStopCollection* stops = nullptr;
+        ID2D1LinearGradientBrush* gradient = nullptr;
+        const D2D1_GRADIENT_STOP stopData[2] = {
+            { 0.f, D2D1::ColorF(fill.r, fill.g, fill.b, fill.a) },
+            { 1.f, D2D1::ColorF(partner.r, partner.g, partner.b, fill.a * 0.8f) }
+        };
+        if (SUCCEEDED(target->CreateGradientStopCollection(stopData, 2, &stops)))
+        {
+            target->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(D2D1::Point2F(rect.left, rect.top), D2D1::Point2F(rect.right, rect.bottom)), stops, &gradient);
+            stops->Release();
+        }
+
+        ID2D1SolidColorBrush* brush = nullptr;
+        target->CreateSolidColorBrush(border, &brush);
+        if (!brush)
+        {
+            if (gradient)
+            {
+                gradient->Release();
+            }
+            return;
+        }
+
+        if (gradient)
+        {
+            target->FillRoundedRectangle(rounded, gradient);
+            gradient->Release();
+        }
+
+        brush->SetColor(D2D1::ColorF(1.f, 1.f, 1.f, 0.28f * border.a));
+        target->DrawLine(D2D1::Point2F(rect.left + ZoneCornerRadius, rect.top + 1.5f), D2D1::Point2F(rect.right - ZoneCornerRadius, rect.top + 1.5f), brush, 1.f);
+
+        brush->SetColor(border);
+        target->DrawRoundedRectangle(rounded, brush, 2.f);
+        brush->Release();
+    }
+
+    // The strip is brightest on the screen edge and fades out inward.
+    void DrawEdgeGuide(ID2D1RenderTarget* target, float width, float height, D2D1_COLOR_F color, ZonesOverlay::EdgeGuide::Side side, float intensity, float depth, float alpha) noexcept
+    {
+        using Side = ZonesOverlay::EdgeGuide::Side;
+        D2D1_RECT_F strip;
+        D2D1_POINT_2F from, to;
+        switch (side)
+        {
+        case Side::Left:
+            strip = D2D1::RectF(0.f, 0.f, depth, height);
+            from = D2D1::Point2F(0.f, 0.f);
+            to = D2D1::Point2F(depth, 0.f);
+            break;
+        case Side::Top:
+            strip = D2D1::RectF(0.f, 0.f, width, depth);
+            from = D2D1::Point2F(0.f, 0.f);
+            to = D2D1::Point2F(0.f, depth);
+            break;
+        case Side::Right:
+            strip = D2D1::RectF(width - depth, 0.f, width, height);
+            from = D2D1::Point2F(width, 0.f);
+            to = D2D1::Point2F(width - depth, 0.f);
+            break;
+        default:
+            strip = D2D1::RectF(0.f, height - depth, width, height);
+            from = D2D1::Point2F(0.f, height);
+            to = D2D1::Point2F(0.f, height - depth);
+            break;
+        }
+
+        const float a = intensity * alpha;
+        const D2D1_GRADIENT_STOP stopData[3] = {
+            { 0.f, D2D1::ColorF(color.r, color.g, color.b, 0.75f * a) },
+            { 0.35f, D2D1::ColorF(color.r, color.g, color.b, 0.22f * a) },
+            { 1.f, D2D1::ColorF(color.r, color.g, color.b, 0.f) }
+        };
+        ID2D1GradientStopCollection* stops = nullptr;
+        ID2D1LinearGradientBrush* gradient = nullptr;
+        if (SUCCEEDED(target->CreateGradientStopCollection(stopData, 3, &stops)))
+        {
+            target->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties(from, to), stops, &gradient);
+            stops->Release();
+        }
+        if (gradient)
+        {
+            target->FillRectangle(strip, gradient);
+            gradient->Release();
+        }
+    }
+
     D2D1_COLOR_F MonitorAccentColor(size_t monitorNumber, float alpha = 1.f) noexcept
     {
         switch ((monitorNumber - 1) % 6)
@@ -291,6 +430,11 @@ ZonesOverlay::RenderResult ZonesOverlay::Render()
         }
     }
 
+    if (m_edgeGuide)
+    {
+        DrawEdgeGuide(m_renderTarget, width, height, ConvertColor(m_edgeGuide->color), m_edgeGuide->side, m_edgeGuide->intensity, m_edgeGuide->depth, animationAlpha);
+    }
+
     IDWriteTextFormat* textFormat = nullptr;
 
     auto writeFactory = GetWriteFactory();
@@ -299,6 +443,9 @@ ZonesOverlay::RenderResult ZonesOverlay::Render()
     {
         writeFactory->CreateTextFormat(NonLocalizable::SegoeUiFont, nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 80.f, L"en-US", &textFormat);
     }
+
+    // Slow breathing of styled zones, 2.4s per cycle. Held at mid-level when Windows animations are off.
+    const float breathe = isEnabledAnimations ? 0.5f + 0.5f * std::sin(static_cast<float>(std::chrono::duration_cast<std::chrono::milliseconds>(renderNow.time_since_epoch()).count() % 2400) / 2400.f * 6.2831853f) : 0.5f;
 
     for (auto drawableRect : m_sceneRects)
     {
@@ -310,8 +457,15 @@ ZonesOverlay::RenderResult ZonesOverlay::Render()
         drawableRect.fillColor.a *= animationAlpha;
         drawableRect.rect = OffsetRect(drawableRect.rect, pulseOffset, 0.f);
 
-        m_renderTarget->CreateSolidColorBrush(drawableRect.borderColor, &borderBrush);
-        m_renderTarget->CreateSolidColorBrush(drawableRect.fillColor, &fillBrush);
+        if (drawableRect.styled)
+        {
+            DrawStyledRect(m_renderTarget, drawableRect.rect, drawableRect.fillColor, drawableRect.borderColor, breathe);
+        }
+        else
+        {
+            m_renderTarget->CreateSolidColorBrush(drawableRect.borderColor, &borderBrush);
+            m_renderTarget->CreateSolidColorBrush(drawableRect.fillColor, &fillBrush);
+        }
 
         if (fillBrush)
         {
@@ -649,6 +803,7 @@ void ZonesOverlay::Hide()
         std::unique_lock lock(m_mutex);
         m_animation.reset();
         m_layoutNameLabel.reset();
+        m_edgeGuide.reset();
         shouldHideWindow = m_shouldRender;
         m_shouldRender = false;
     }
@@ -686,6 +841,12 @@ void ZonesOverlay::Show()
     m_cv.notify_all();
 }
 
+void ZonesOverlay::SetEdgeGuide(std::optional<EdgeGuide> guide)
+{
+    std::unique_lock lock(m_mutex);
+    m_edgeGuide = guide;
+}
+
 void ZonesOverlay::Flash()
 {
     bool shouldShowWindow = true;
@@ -708,7 +869,8 @@ void ZonesOverlay::Flash()
 void ZonesOverlay::DrawActiveZoneSet(const ZonesMap& zones,
                                      const ZoneIndexSet& highlightZones,
                                      const Colors::ZoneColors& colors,
-                                     const bool showZoneText)
+                                     const bool showZoneText,
+                                     const bool styled)
 {
     std::unique_lock lock(m_mutex);
 
@@ -744,7 +906,8 @@ void ZonesOverlay::DrawActiveZoneSet(const ZonesMap& zones,
                 .fillColor = inactiveColor,
                 .textColor = numberColor,
                 .id = zone.Id(),
-                .showText = showZoneText
+                .showText = showZoneText,
+                .styled = styled
             };
 
             m_sceneRects.push_back(drawableRect);
@@ -762,7 +925,8 @@ void ZonesOverlay::DrawActiveZoneSet(const ZonesMap& zones,
                 .fillColor = highlightColor,
                 .textColor = numberColor,
                 .id = zone.Id(),
-                .showText = showZoneText
+                .showText = showZoneText,
+                .styled = styled
             };
 
             m_sceneRects.push_back(drawableRect);
@@ -776,6 +940,7 @@ void ZonesOverlay::DrawMonitorRotationPreview(const std::vector<RECT>& windowRec
 
     m_sceneRects = {};
     m_drawBackdrop = true;
+    m_edgeGuide.reset();
     m_rotationDirection = reverse.has_value() ? (reverse.value() ? RotationDirection::Left : RotationDirection::Right) : RotationDirection::Both;
     m_animateRotation = animateRotation && reverse.has_value();
     m_monitorNumber = monitorNumber;

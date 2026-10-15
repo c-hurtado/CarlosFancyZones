@@ -194,6 +194,7 @@ void WorkArea::ShowZones(const ZoneIndexSet& highlight, HWND draggedWindow/* = n
 void WorkArea::HideZones()
 {
     m_dockPreview.reset();
+    m_dockColors.reset();
     if (m_zonesOverlay)
     {
         m_zonesOverlay->Hide();
@@ -314,9 +315,47 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
 
     const RECT area{ 0, 0, m_workAreaRect.width(), m_workAreaRect.height() };
     const auto target = DockTarget(DockTree(), area, pt);
-    if (!target)
+
+    // Glow on the nearest work area edge, stronger the closer the cursor gets to the dock band
+    const auto& settings = FancyZonesSettings::settings();
+    const float band = static_cast<float>(settings.dockEdgeBand);
+    const float reach = band * 3.f;
+    if (!m_dockColors)
+    {
+        // GetZoneColors reads WinRT UISettings: once per drag, not per mouse move
+        m_dockColors = Colors::GetZoneColors();
+    }
+    const std::pair<ZonesOverlay::EdgeGuide::Side, float> distances[] = {
+        { ZonesOverlay::EdgeGuide::Side::Left, static_cast<float>(pt.x - area.left) },
+        { ZonesOverlay::EdgeGuide::Side::Top, static_cast<float>(pt.y - area.top) },
+        { ZonesOverlay::EdgeGuide::Side::Right, static_cast<float>(area.right - pt.x) },
+        { ZonesOverlay::EdgeGuide::Side::Bottom, static_cast<float>(area.bottom - pt.y) },
+    };
+    const auto nearest = std::min_element(std::begin(distances), std::end(distances), [](const auto& a, const auto& b) { return a.second < b.second; });
+    std::optional<ZonesOverlay::EdgeGuide> guide;
+    // Outside the work area (taskbar, other monitor) nothing docks, so no guide either
+    if (!settings.spanZonesAcrossMonitors && PtInRect(&area, pt) && nearest->second < reach)
+    {
+        const float t = std::clamp((reach - (std::max)(nearest->second, band)) / (reach - band), 0.f, 1.f);
+        const float maxDepth = static_cast<float>((std::min)(area.right, area.bottom)) / 4.f;
+        guide = ZonesOverlay::EdgeGuide{ nearest->first, t * t * (3.f - 2.f * t), (std::min)((std::max)(band * 1.5f, 72.f), maxDepth), m_dockColors->highlightColor };
+    }
+
+    if (!target && !guide)
     {
         HideZones();
+        return;
+    }
+
+    m_zonesOverlay->SetEdgeGuide(guide);
+
+    if (!target)
+    {
+        // Only the glow: the cursor is near an edge but nothing would dock yet
+        m_dockPreview.reset();
+        m_zonesOverlay->DrawActiveZoneSet({}, {}, *m_dockColors, false);
+        SetWorkAreaWindowAsTopmost(draggedWindow);
+        m_zonesOverlay->Show();
         return;
     }
 
@@ -330,7 +369,7 @@ void WorkArea::ShowDockPreview(POINT pt, HWND draggedWindow)
     ZonesMap preview;
     preview.emplace(0, Zone(target->preview, 0));
     SetWorkAreaWindowAsTopmost(draggedWindow);
-    m_zonesOverlay->DrawActiveZoneSet(preview, { 0 }, Colors::GetZoneColors(), false);
+    m_zonesOverlay->DrawActiveZoneSet(preview, { 0 }, *m_dockColors, false, true);
     m_zonesOverlay->Show();
 }
 
