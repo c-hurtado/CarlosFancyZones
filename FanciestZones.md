@@ -21,7 +21,7 @@ Two rules keep it running:
 
 ### Dock with the mouse
 
-Hold **Shift** while you drag a window (see `fancyzones_shiftDrag` to change that). A preview shows where the window lands.
+Hold **Shift** while you drag a window (see `fancyzones_shiftDrag` to change that). A preview shows where the window lands. The preview is a rounded zone with a gradient fill (the accent color shading to a neighboring hue) that breathes slightly. As the cursor nears a screen edge, a glow along that edge strengthens until it is inside the edge band, where the window takes half of the screen. The animation holds still when Windows animation effects are off.
 
 | Drop the window | Result |
 |---|---|
